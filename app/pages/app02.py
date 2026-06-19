@@ -9,7 +9,7 @@ st.title("社会情報プロジェクト実習I")
 st.subheader("データ分析関連")
 # CSVファイルの読み込み
 import pandas as pd
-df = pd.read_csv("data/iris.csv",encoding="utf-8")
+df = pd.read_csv("app/data/iris.csv",encoding="utf-8")
 # データフレームを表示（ブラウザでスクロール可能）
 st.subheader("データフレーム（ブラウザでスクロール可能）") # 見出し 
 st.dataframe(df)
