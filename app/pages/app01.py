@@ -8,7 +8,7 @@ st.subheader("基本オブジェクト")
 st.write("テキストの練習")
 # 画像
 from PIL import Image 
-image = Image.open("data/tut.png")
+image = Image.open(".app/data/tut.png")
 st.image(image)
 # テキストボックス
 studentID = st.text_input("学籍番号") 
