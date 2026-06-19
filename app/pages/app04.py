@@ -7,7 +7,7 @@ st.title("社会情報プロジェクト実習I") # タイトル
 st.subheader("plotlyの使い方") # 見出し
 
 # CSVファイルの読み込み
-df = pd.read_csv("data/iris.csv", encoding="utf-8")
+df = pd.read_csv("app/data/iris.csv", encoding="utf-8")
 
 # plotlyによるグラフ作成
 fig = px.scatter(
