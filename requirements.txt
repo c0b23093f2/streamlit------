@@ -1,5 +1,7 @@
-streamlit>=1.36
-yfinance>=0.2.40
-pandas>=2.0
-plotly>=5.20
-streamlit-autorefresh>=1.0.1
+streamlit
+matplotlib
+pillow
+yfinance
+pandas
+plotly
+sympy
