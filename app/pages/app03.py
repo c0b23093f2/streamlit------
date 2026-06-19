@@ -21,5 +21,5 @@ with col2: # ２列目の領域
     st.subheader("画像表示")
 
     # 画像
-    image = Image.open("data/tut.png")
+    image = Image.open("app/data/tut.png")
     st.image(image)
