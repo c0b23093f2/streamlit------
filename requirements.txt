@@ -4,4 +4,4 @@ pillow
 yfinance
 pandas
 plotly
-sympy
+matplotlib_fontja
