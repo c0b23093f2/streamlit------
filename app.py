@@ -1291,6 +1291,7 @@ def page_detail() -> None:
     with st.container():
         c1, c2 = st.columns([4, 1])
         
+        # 输入框提示
         code_in = c1.text_input(
             "証券コード・銘柄名",
             placeholder="例: 7203.T, トヨタ, 9984.T, ^N225",
@@ -1303,15 +1304,18 @@ def page_detail() -> None:
             k = code_in.strip()
             target_code = None
             
+            # 1. 检查是否为字典里已知的日语名称
             if k in JMAP:
                 target_code = JMAP[k]
+            # 2. 检查是否为4位纯数字
             elif k.isdigit() and len(k) == 4:
-                target_code = f"{k}.T"
+                target_code = f"{k}.T" # 自动补全后缀
+            # 3. 检查是否为有效的后缀代码
             elif k.upper().endswith(".T") or k.startswith("^"):
                 target_code = k.upper()
                 
+            # 4. 如果生成了候选代码，验证数据是否存在
             if target_code:
-                # 验证数据存在性
                 @st.cache_data(ttl=10, show_spinner=False)
                 def validate_price(code):
                     if yf is None: return False
@@ -1325,15 +1329,20 @@ def page_detail() -> None:
                     ss["sym"] = target_code
                     st.rerun()
                 else:
-                    st.error(f"❌ 入力エラー：'{k}' は存在しない、またはデータを取得できない銘柄コードです。")
+                    # 数据不存在（比如输入了 0000）
+                    st.error(f"❌ 入力エラー：'{k}' はデータを取得できない、または存在しない銘柄です。")
                     ss["sym"] = None
             else:
-                st.error(f"❌ 入力エラー：'{k}' は有効な銘柄コードではありません。形式をご確認ください（例：7203.T, トヨタ）。")
+                # ==========================================
+                # 【核心修改】：当用户输入了字典以外的文字时，使用更温和的提示
+                # ==========================================
+                st.info(f"💡 「{k}」は現在の辞書に登録されていません。確実に検索するには、**4桁の証券コード**（例：7203.T）をご利用ください。")
                 ss["sym"] = None
 
     sym = ss.get("sym")
     if not sym:
-        st.info("上部の入力欄に正しい証券コード（例：7203.T）または銘柄名を入力して「表示」をクリックしてください。")
+        # 这里的默认提示也改成更积极引导使用代码
+        st.info("💡 **4桁の証券コード**（例: 7203.T）を入力して「表示」をクリックすると、すべての銘柄を検索できます。")
         return
 
     # =================【核心修复区】=================
