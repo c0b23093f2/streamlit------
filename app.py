@@ -1191,6 +1191,10 @@ def page_trade() -> None:
 
     with right:
         st.markdown("### 🛒 注文フォーム")
+        # クイック銘柄で選んだコードを、ウィジェット生成前に反映する
+        pending = ss.pop("_trade_code_pending", None)
+        if pending is not None:
+            ss["trade_code"] = pending
         code = st.text_input("証券コード", placeholder="例: 7203", key="trade_code")
         ticker = normalize_jp(code)
         price = get_price(ticker) if ticker else None
@@ -1214,7 +1218,7 @@ def page_trade() -> None:
         qcols = st.columns(2)
         for i, tk in enumerate(QUICK_TICKERS):
             if qcols[i % 2].button(CODE2NAME.get(tk, tk), key=f"pq_{tk}", use_container_width=True):
-                ss["trade_code"] = tk.replace(".T", "")
+                ss["_trade_code_pending"] = tk.replace(".T", "")
                 st.rerun()
 
         st.divider()
