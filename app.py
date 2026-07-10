@@ -1,7 +1,19 @@
+"""
+📈 うめぇ〜go株 — 統合版（1ファイル・マルチページ）
+
+構成:
+    ホーム（銘柄検索・ランキング） → 銘柄詳細（チャート/テクニカル判定/予測/ニュース/決算）
+    左上の ☰ ハンバーガーメニューから 指標解説・お気に入り銘柄・デモトレード へ移動
+
+実行方法:
+    pip install -r requirements.txt
+    streamlit run app.py
+"""
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -371,8 +383,13 @@ def _db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS favorites ("
-        "code TEXT PRIMARY KEY, name TEXT, note TEXT DEFAULT '', created_at TEXT)"
+        "CREATE TABLE IF NOT EXISTS users ("
+        "username TEXT PRIMARY KEY, password TEXT, created_at TEXT, portfolio TEXT DEFAULT '')"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_favorites ("
+        "username TEXT, code TEXT, name TEXT, note TEXT DEFAULT '', created_at TEXT, "
+        "PRIMARY KEY (username, code))"
     )
     return conn
 
@@ -386,13 +403,92 @@ def _use_mem() -> None:
     st.session_state["fav_persist_err"] = True
 
 
+def current_user() -> str:
+    return st.session_state.get("user", "")
+
+
+# --- ユーザー管理（学習用のため平文保存。セキュリティは考慮しない） ---
+def user_create(username: str, password: str) -> bool:
+    """作成できたら True、既に存在すれば False。"""
+    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
+    try:
+        with _db() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO users (username, password, created_at) VALUES (?,?,?)",
+                (username, password, now),
+            )
+            return cur.rowcount > 0
+    except Exception:
+        _use_mem()
+        users = st.session_state.setdefault("users_mem", {})
+        if username in users:
+            return False
+        users[username] = password
+        return True
+
+
+def user_verify(username: str, password: str) -> bool:
+    try:
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT password FROM users WHERE username=?", (username,)
+            ).fetchone()
+        return row is not None and row[0] == password
+    except Exception:
+        _use_mem()
+        return st.session_state.get("users_mem", {}).get(username) == password
+
+
+# --- ポートフォリオ（デモトレード）のアカウント別保存 ---
+def portfolio_save() -> None:
+    user = current_user()
+    if not user:
+        return
+    ss = st.session_state
+    data = {
+        "cash": ss.get("cash", float(INITIAL_CASH)),
+        "positions": {t: [p.shares, p.cost_basis] for t, p in ss.get("positions", {}).items()},
+        "trades": ss.get("trades", []),
+    }
+    try:
+        with _db() as conn:
+            conn.execute("UPDATE users SET portfolio=? WHERE username=?",
+                         (json.dumps(data, ensure_ascii=False), user))
+    except Exception:
+        _use_mem()  # フォールバック環境ではセッション内のみ保持
+
+
+def portfolio_load(user: str) -> None:
+    """ログイン時に、そのユーザーのポートフォリオをセッションに読み込む。"""
+    ss = st.session_state
+    ss["cash"] = float(INITIAL_CASH)
+    ss["positions"] = {}
+    ss["trades"] = []
+    try:
+        with _db() as conn:
+            row = conn.execute("SELECT portfolio FROM users WHERE username=?", (user,)).fetchone()
+        if row and row[0]:
+            d = json.loads(row[0])
+            ss["cash"] = float(d.get("cash", INITIAL_CASH))
+            ss["positions"] = {t: Position(int(v[0]), float(v[1]))
+                               for t, v in d.get("positions", {}).items()}
+            ss["trades"] = list(d.get("trades", []))
+    except Exception:
+        pass
+
+
+# --- お気に入り（アカウント別） ---
 def fav_all() -> pd.DataFrame:
     cols = ["code", "name", "note", "created_at"]
     try:
         with _db() as conn:
-            df = pd.read_sql_query("SELECT * FROM favorites ORDER BY created_at DESC", conn)
+            df = pd.read_sql_query(
+                "SELECT code, name, note, created_at FROM user_favorites "
+                "WHERE username=? ORDER BY created_at DESC",
+                conn, params=(current_user(),),
+            )
         return df if not df.empty else pd.DataFrame(columns=cols)
-    except sqlite3.Error:
+    except Exception:
         _use_mem()
         rows = [{"code": k, **v} for k, v in _mem().items()]
         return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
@@ -401,8 +497,9 @@ def fav_all() -> pd.DataFrame:
 def fav_codes() -> set[str]:
     try:
         with _db() as conn:
-            return {r[0] for r in conn.execute("SELECT code FROM favorites")}
-    except sqlite3.Error:
+            return {r[0] for r in conn.execute(
+                "SELECT code FROM user_favorites WHERE username=?", (current_user(),))}
+    except Exception:
         _use_mem()
         return set(_mem())
 
@@ -412,10 +509,11 @@ def fav_add(code: str, name: str) -> None:
     try:
         with _db() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO favorites (code, name, note, created_at) VALUES (?,?,?,?)",
-                (code, name, "", now),
+                "INSERT OR IGNORE INTO user_favorites (username, code, name, note, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (current_user(), code, name, "", now),
             )
-    except sqlite3.Error:
+    except Exception:
         _use_mem()
         _mem().setdefault(code, {"name": name, "note": "", "created_at": now})
 
@@ -423,8 +521,9 @@ def fav_add(code: str, name: str) -> None:
 def fav_remove(code: str) -> None:
     try:
         with _db() as conn:
-            conn.execute("DELETE FROM favorites WHERE code=?", (code,))
-    except sqlite3.Error:
+            conn.execute("DELETE FROM user_favorites WHERE username=? AND code=?",
+                         (current_user(), code))
+    except Exception:
         _use_mem()
         _mem().pop(code, None)
 
@@ -432,8 +531,9 @@ def fav_remove(code: str) -> None:
 def fav_note(code: str, note: str) -> None:
     try:
         with _db() as conn:
-            conn.execute("UPDATE favorites SET note=? WHERE code=?", (note, code))
-    except sqlite3.Error:
+            conn.execute("UPDATE user_favorites SET note=? WHERE username=? AND code=?",
+                         (note, current_user(), code))
+    except Exception:
         _use_mem()
         if code in _mem():
             _mem()[code]["note"] = note
@@ -442,10 +542,11 @@ def fav_note(code: str, note: str) -> None:
 def fav_clear() -> int:
     try:
         with _db() as conn:
-            n = conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
-            conn.execute("DELETE FROM favorites")
+            n = conn.execute("SELECT COUNT(*) FROM user_favorites WHERE username=?",
+                             (current_user(),)).fetchone()[0]
+            conn.execute("DELETE FROM user_favorites WHERE username=?", (current_user(),))
             return n
-    except sqlite3.Error:
+    except Exception:
         _use_mem()
         n = len(_mem())
         _mem().clear()
@@ -514,6 +615,7 @@ def execute_trade(ticker: str, side: str, shares: int, price: float) -> tuple[bo
         "価格": round(price, 1),
         "約定額": round(cost, 0),
     })
+    portfolio_save()
     return True, f"{side} 約定: {label_of(ticker)} {shares}株 @ ¥{price:,.1f}"
 
 
@@ -946,7 +1048,7 @@ def render_order_form(sym: str, price: float | None) -> None:
 def page_favorites() -> None:
     st.markdown(
         '<div class="app-header"><h1>⭐ お気に入り銘柄</h1>'
-        '<p>登録したお気に入りは、この端末に保存され、アプリを閉じても残ります。</p></div>',
+        '<p>お気に入りはアカウントごとに保存され、ログインすればいつでも見られます。</p></div>',
         unsafe_allow_html=True,
     )
     favorites = fav_all()
@@ -1216,6 +1318,7 @@ def page_trade() -> None:
             for k in ("cash", "positions", "trades"):
                 ss.pop(k, None)
             init_trade_state()
+            portfolio_save()
             st.rerun()
         st.caption("※ デモ（ペーパートレード）です。実際の取引は行われません。")
 
@@ -1230,12 +1333,60 @@ PG_GLOSSARY = st.Page(page_glossary, title="指標解説", icon="📚", url_path
 PG_TRADE = st.Page(page_trade, title="デモトレード", icon="💼", url_path="trade")
 
 
+def render_auth() -> None:
+    """ログイン / アカウント作成ページ"""
+    _, center, _ = st.columns([1, 1.6, 1])
+    with center:
+        st.markdown(
+            '<div class="app-header"><h1>📈 うめぇ〜go株</h1>'
+            '<p>IDとパスワードでログイン、または新規登録してください</p></div>',
+            unsafe_allow_html=True,
+        )
+        tab_login, tab_signup = st.tabs(["🔑 ログイン", "🆕 アカウント作成"])
+
+        with tab_login:
+            u = st.text_input("ID（ユーザー名）", key="login_user")
+            p = st.text_input("パスワード", type="password", key="login_pass")
+            if st.button("ログイン", type="primary", use_container_width=True):
+                if user_verify(u.strip(), p):
+                    st.session_state["user"] = u.strip()
+                    portfolio_load(u.strip())
+                    st.rerun()
+                else:
+                    st.error("IDまたはパスワードが違います。")
+
+        with tab_signup:
+            u2 = st.text_input("ID（ユーザー名）", key="signup_user",
+                               placeholder="例: taro")
+            p2 = st.text_input("パスワード", type="password", key="signup_pass")
+            p3 = st.text_input("パスワード（確認）", type="password", key="signup_pass2")
+            if st.button("アカウントを作成", type="primary", use_container_width=True):
+                if not u2.strip() or not p2:
+                    st.error("IDとパスワードを入力してください。")
+                elif p2 != p3:
+                    st.error("確認用パスワードが一致しません。")
+                elif user_create(u2.strip(), p2):
+                    st.session_state["user"] = u2.strip()
+                    portfolio_load(u2.strip())
+                    st.rerun()
+                else:
+                    st.error("このIDは既に使われています。別のIDを入力してください。")
+
+        st.caption("※ 学習用アプリのためパスワードは平文で保存されます。普段使っているパスワードは入力しないでください。")
+
+
 def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
+
+    # 未ログインならログイン/新規登録ページのみ表示
+    if not st.session_state.get("user"):
+        render_auth()
+        return
+
     nav = st.navigation([PG_HOME, PG_DETAIL, PG_FAV, PG_GLOSSARY, PG_TRADE], position="hidden")
 
     # 左上ハンバーガーメニュー（全ページ共通・固定）
-    mcol, tcol = st.columns([0.08, 0.92])
+    mcol, tcol, ucol = st.columns([0.08, 0.67, 0.25])
     with mcol:
         with st.popover("☰", use_container_width=True):
             st.markdown("**メニュー**")
@@ -1250,6 +1401,14 @@ def main() -> None:
         f'　{dt.datetime.now():%Y/%m/%d %H:%M} 時点</span></div>',
         unsafe_allow_html=True,
     )
+    with ucol:
+        with st.popover(f"👤 {st.session_state['user']}", use_container_width=True):
+            st.caption(f"ログイン中: {st.session_state['user']}")
+            if st.button("🚪 ログアウト", use_container_width=True):
+                portfolio_save()
+                for k in ("user", "cash", "positions", "trades", "fav_mem", "sym"):
+                    st.session_state.pop(k, None)
+                st.rerun()
 
     if yf is None:
         st.error("`yfinance` がインストールされていません。`pip install yfinance` を実行してください。")
