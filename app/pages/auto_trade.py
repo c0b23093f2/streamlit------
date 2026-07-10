@@ -5,6 +5,7 @@
      到達したら自動で決済（エントリー戦略とは独立して動作）
 - ③ 自動エントリー: RSI逆張り / SMAクロス順張り / MACDプラ転 / 複合シグナル
      （プリセットまたはカスタムでパラメーター調整可）
+- 対象銘柄: JPX「東証上場銘柄一覧」を自動取得（全上場銘柄 約3,900社から検索して選択可）
 
 現金・ポジション・取引履歴は demo.py と共有（st.session_state）。
 このページを開いている間（自動更新ON推奨）に判定サイクルが実行されます。
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import os
 from dataclasses import dataclass
 
 import pandas as pd
@@ -31,9 +33,19 @@ st.set_page_config(page_title="自動売買", page_icon="🤖", layout="wide")
 UP = "#16c784"
 DOWN = "#ea3943"
 INITIAL_CASH = 1_000_000
-CACHE_TTL = 30
+CACHE_TTL = 60
 
-DEFAULT_TICKERS = ["7203.T", "9984.T", "6758.T", "8306.T", "9432.T", "6861.T", "8035.T", "7974.T"]
+# JPX 東証上場銘柄一覧（demo.py と同じキャッシュを共有）
+JPX_LIST_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+JPX_CSV = "data/jpx_list.csv"
+PRICE_DIR = "data/prices"  # 事前ダウンロードした日足データの保存先（demo.py と共有）
+
+DEFAULT_TICKERS = [
+    "7203.T", "9984.T", "6758.T", "8306.T", "9432.T", "6861.T", "8035.T", "7974.T",
+    "9983.T", "6098.T", "8058.T", "8001.T", "9433.T", "6501.T", "7267.T", "8316.T",
+    "4063.T", "4568.T", "8766.T", "6367.T", "6954.T", "6981.T", "2914.T", "9101.T",
+]
+# JPX一覧の取得に失敗したときのフォールバック用
 TICKER_NAMES = {
     "7203.T": "トヨタ自動車",
     "9984.T": "ソフトバンクG",
@@ -43,6 +55,22 @@ TICKER_NAMES = {
     "6861.T": "キーエンス",
     "8035.T": "東京エレクトロン",
     "7974.T": "任天堂",
+    "9983.T": "ファーストリテイリング",
+    "6098.T": "リクルートHD",
+    "8058.T": "三菱商事",
+    "8001.T": "伊藤忠商事",
+    "9433.T": "KDDI",
+    "6501.T": "日立製作所",
+    "7267.T": "ホンダ",
+    "8316.T": "三井住友FG",
+    "4063.T": "信越化学",
+    "4568.T": "第一三共",
+    "8766.T": "東京海上HD",
+    "6367.T": "ダイキン工業",
+    "6954.T": "ファナック",
+    "6981.T": "村田製作所",
+    "2914.T": "JT",
+    "9101.T": "日本郵船",
 }
 
 
@@ -78,8 +106,67 @@ def normalize_jp(code: str) -> str:
     return code if code.endswith(".T") else f"{code.replace('.T', '')}.T"
 
 
+# ---------------------------------------------------------------------------
+# 銘柄一覧（JPX 全上場銘柄）
+# ---------------------------------------------------------------------------
+def _fetch_jpx_master() -> pd.DataFrame:
+    """JPXから銘柄一覧Excelをダウンロード。
+
+    JPXはUser-Agentのないアクセスを拒否することがあるため、
+    ブラウザ相当のヘッダーを付けて取得する。パースには xlrd が必要。
+    """
+    import io
+    import urllib.request
+    req = urllib.request.Request(
+        JPX_LIST_URL,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as res:
+        raw = res.read()
+    df = pd.read_excel(io.BytesIO(raw), dtype=str)  # 要 xlrd
+    # ETF・REIT等を除き、国内株式（プライム/スタンダード/グロース）のみ
+    df = df[df["市場・商品区分"].str.contains("プライム|スタンダード|グロース", na=False)]
+    return df[["コード", "銘柄名"]]
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner="銘柄一覧を取得中...")
+def _load_jpx() -> tuple[dict[str, str], str]:
+    """JPXの全上場銘柄一覧を取得し ({ティッカー: 銘柄名}, エラー文字列) を返す。
+
+    - demo.py と同じ data/jpx_list.csv をキャッシュとして共有
+    - 取得失敗時はフォールバック辞書とエラー内容を返す（表示は呼び出し側で1回だけ）
+    """
+    try:
+        if os.path.exists(JPX_CSV):
+            df = pd.read_csv(JPX_CSV, dtype=str)
+        else:
+            df = _fetch_jpx_master()
+            os.makedirs("data", exist_ok=True)
+            df.to_csv(JPX_CSV, index=False)
+        return {f"{c}.T": n for c, n in zip(df["コード"], df["銘柄名"])}, ""
+    except Exception as e:
+        return dict(TICKER_NAMES), f"{type(e).__name__}: {e}"
+
+
+def load_all_names() -> dict[str, str]:
+    return _load_jpx()[0]
+
+
+def jpx_error() -> str:
+    return _load_jpx()[1]
+
+
+def search_names(names: dict[str, str], query: str, limit: int = 30) -> list[str]:
+    """社名・コードの部分一致で検索し、上位limit件のティッカーを返す。
+    全件をUIに渡すと描画が重くなるため、絞り込み結果だけを表示する。"""
+    q = (query or "").strip().upper()
+    if not q:
+        return []
+    return [t for t, n in names.items() if q in t or q in str(n).upper()][:limit]
+
+
 def label_of(ticker: str) -> str:
-    name = TICKER_NAMES.get(ticker)
+    name = load_all_names().get(ticker) or TICKER_NAMES.get(ticker)
     return f"{name}（{ticker}）" if name else ticker
 
 
@@ -88,25 +175,110 @@ def yen(x: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# データ取得
+# ローカルデータストア（事前一括ダウンロード・demo.py と共有）
+# ---------------------------------------------------------------------------
+def _local_file(ticker: str) -> str:
+    return os.path.join(PRICE_DIR, f"{ticker.replace('.T', '')}.csv")
+
+
+def has_local(ticker: str) -> bool:
+    """日足データがローカルに取得済みか（選択UIは通信せずこれだけで判定）。"""
+    return os.path.exists(_local_file(ticker))
+
+
+def load_local_daily(ticker: str) -> pd.DataFrame:
+    """事前ダウンロード済みの日足を読む。無ければ空のDataFrame。"""
+    try:
+        return pd.read_csv(_local_file(ticker), index_col=0, parse_dates=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def bulk_download(tickers: list[str], period: str = "2y") -> int:
+    """複数銘柄の日足を一括ダウンロードして data/prices/ に保存。戻り値は成功数。"""
+    if yf is None or not tickers:
+        return 0
+    os.makedirs(PRICE_DIR, exist_ok=True)
+    try:
+        data = yf.download(tickers, period=period, interval="1d",
+                           group_by="ticker", threads=True, progress=False)
+    except Exception:
+        return 0
+    ok = 0
+    for t in tickers:
+        try:
+            df = data[t].dropna(how="all") if len(tickers) > 1 else data.dropna(how="all")
+            df = df.dropna(subset=["Close"])
+            if not df.empty:
+                df.to_csv(_local_file(t))
+                ok += 1
+        except Exception:
+            continue
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# データ取得（ローカル優先 → yfinance）
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_price(ticker: str) -> float | None:
-    if yf is None:
-        return None
-    try:
-        data = yf.Ticker(ticker).history(period="1d", interval="1m")
-        if data.empty:
-            data = yf.Ticker(ticker).history(period="5d")
-        if data.empty:
-            return None
-        return float(data["Close"].dropna().iloc[-1])
-    except Exception:
-        return None
+    """リアルタイム価格。保有中・エントリー候補の銘柄に対してのみ呼ばれる。
+    軽量なクオートAPI（fast_info）を優先し、失敗時は1分足→ローカル終値の順にフォールバック。"""
+    if yf is not None:
+        try:
+            p = getattr(yf.Ticker(ticker).fast_info, "last_price", None)
+            if p:
+                return float(p)
+        except Exception:
+            pass
+        try:
+            data = yf.Ticker(ticker).history(period="1d", interval="1m")
+            if data.empty:
+                data = yf.Ticker(ticker).history(period="5d")
+            if not data.empty:
+                return float(data["Close"].dropna().iloc[-1])
+        except Exception:
+            pass
+    df = load_local_daily(ticker)
+    if not df.empty:
+        return float(df["Close"].dropna().iloc[-1])
+    return None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_prices(tickers: tuple[str, ...]) -> dict[str, float]:
+    """複数銘柄の現在値を1回の通信でまとめて取得（監視・保有一覧用）。
+    取れなかった銘柄はローカル保存済みの終値で補完。"""
+    out: dict[str, float] = {}
+    if not tickers:
+        return out
+    if yf is not None:
+        try:
+            data = yf.download(list(tickers), period="1d", interval="1m",
+                               group_by="ticker", threads=True, progress=False)
+            for t in tickers:
+                try:
+                    s = (data[t]["Close"] if len(tickers) > 1 else data["Close"]).dropna()
+                    if not s.empty:
+                        out[t] = float(s.iloc[-1])
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    for t in tickers:
+        if t not in out:
+            df = load_local_daily(t)
+            if not df.empty:
+                out[t] = float(df["Close"].dropna().iloc[-1])
+    return out
+
+
+@st.cache_data(ttl=300, persist="disk", show_spinner=False)
 def get_daily(ticker: str) -> pd.DataFrame:
+    # 事前ダウンロード済みならローカルから即返す（6ヶ月分相当を切り出し）
+    local = load_local_daily(ticker)
+    if not local.empty:
+        return local.tail(130)
     if yf is None:
         return pd.DataFrame()
     try:
@@ -301,13 +473,28 @@ def run_cycle(risk_on: bool, entry_on: bool, p: dict) -> list[str]:
     ss = st.session_state
     events: list[str] = []
     k, m = p["k"], p["m"]
+    held_tk = [t for t, pos in ss.positions.items() if getattr(pos, "shares", 0) > 0]
+
+    # --- 実行時ダウンロード: 未取得の銘柄データをここでまとめてDL（選択時は通信しない） ---
+    need = [t for t in (p["universe"] if entry_on else []) + (held_tk if risk_on else [])
+            if not has_local(t)]
+    need = list(dict.fromkeys(need))
+    if need:
+        n = bulk_download(need)
+        get_daily.clear()
+        predict_vol.clear()
+        indicators.clear()
+        events.append(f"📦 未取得だった{len(need)}銘柄中{n}銘柄のデータをダウンロードしました")
+
+    # 保有銘柄の現在値を1回の通信でまとめて取得
+    held_prices = get_prices(tuple(held_tk))
 
     # --- ② 損切り・利確（手動/自動を問わず全ポジションに適用） ---
     if risk_on:
         for tk, pos in list(ss.positions.items()):
             if getattr(pos, "shares", 0) <= 0:
                 continue
-            price = get_price(tk)
+            price = held_prices.get(tk)
             if not price:
                 continue
             tgt = ss.auto_targets.get(tk)
@@ -379,15 +566,40 @@ def render_sidebar() -> tuple[bool, bool, bool]:
                             help="全保有ポジションに予測ボラ基準のラインを設定し、到達で自動決済")
         entry_on = st.toggle("自動エントリー", value=False,
                              help="シグナル発生時に自動で買い建て")
-        auto_ref = st.toggle("自動更新（30秒）", value=False)
+        auto_ref = st.toggle(f"自動更新（{CACHE_TTL}秒）", value=False)
         if auto_ref:
             try:
                 from streamlit_autorefresh import st_autorefresh
-                st_autorefresh(interval=30 * 1000, key="auto_trade_refresh")
-                st.caption("🟢 30秒ごとに自動判定中")
+                st_autorefresh(interval=CACHE_TTL * 1000, key="auto_trade_refresh")
+                st.caption(f"🟢 {CACHE_TTL}秒ごとに自動判定中")
             except ImportError:
                 st.caption("`streamlit-autorefresh` 未導入のため手動実行してください。")
         st.divider()
+        st.markdown("#### 📦 事前ダウンロード")
+        st.caption("対象銘柄+保有銘柄の日足をローカル保存。指標計算は以後ローカルから実行")
+        if st.button("⬇️ 対象銘柄のデータを一括DL", use_container_width=True):
+            ss = st.session_state
+            targets = list(dict.fromkeys(
+                ss.get("universe_sel", []) +
+                [t for t, p in ss.positions.items() if getattr(p, "shares", 0) > 0]))
+            with st.spinner(f"{len(targets)}銘柄をダウンロード中..."):
+                n = bulk_download(targets)
+            get_daily.clear()
+            predict_vol.clear()
+            indicators.clear()
+            if n:
+                st.success(f"{n}銘柄を保存しました")
+            else:
+                st.error("ダウンロードに失敗しました（対象銘柄が空でないか確認）")
+        st.divider()
+        if st.button("📥 銘柄一覧を再取得", use_container_width=True,
+                     help="JPXの全上場銘柄一覧をダウンロードし直します"):
+            _load_jpx.clear()
+            try:
+                os.remove(JPX_CSV)
+            except OSError:
+                pass
+            st.rerun()
         if st.button("↩️ 監視ライン/クールダウンをリセット", use_container_width=True):
             st.session_state.auto_targets = {}
             st.session_state.cooldown = {}
@@ -398,14 +610,30 @@ def render_sidebar() -> tuple[bool, bool, bool]:
 
 def render_params() -> dict:
     st.markdown("### ⚙️ パラメーター")
+    names = load_all_names()
+    ss = st.session_state
+    ss.setdefault("universe_sel", list(DEFAULT_TICKERS[:4]))
     c1, c2 = st.columns(2)
 
     with c1:
-        universe_labels = st.multiselect(
-            "対象銘柄", [label_of(t) for t in DEFAULT_TICKERS],
-            default=[label_of(t) for t in DEFAULT_TICKERS[:4]], key="p_universe")
+        q = st.text_input(
+            f"🔍 銘柄検索して追加（全{len(names):,}銘柄・社名やコードの一部を入力してEnter）",
+            key="u_query", placeholder="例: 任天堂 / 7974")
+        hits = search_names(names, q)
+        if q and not hits:
+            st.caption("該当する銘柄がありません。")
+        elif hits:
+            a, b = st.columns([3, 1])
+            pick = a.selectbox("検索結果", hits, format_func=label_of,
+                               label_visibility="collapsed")
+            if b.button("＋ 追加", use_container_width=True) and pick not in ss.universe_sel:
+                ss.universe_sel.append(pick)
+        universe_sel = st.multiselect(
+            "対象銘柄（×で除外）", ss.universe_sel, default=ss.universe_sel,
+            format_func=label_of)
+        ss.universe_sel = list(universe_sel)
         extra = st.text_input("追加銘柄（証券コードをカンマ区切りで 例: 6501, 4063）",
-                              key="p_extra", placeholder="リストにない銘柄も対象にできます")
+                              key="p_extra", placeholder="コード直接指定でも追加できます")
     with c2:
         preset_name = st.selectbox("設定プリセット（リストから選択）",
                                    list(PRESETS.keys()), index=1, key="p_preset")
@@ -457,7 +685,7 @@ def render_params() -> dict:
                       k=k, m=m, trailing=trailing, vol_max=vol_max,
                       cooldown_h=cooldown_h, loss_limit=loss_limit)
 
-    universe = [t for t in DEFAULT_TICKERS if label_of(t) in universe_labels]
+    universe = list(ss.universe_sel)
     for code in (extra or "").replace("、", ",").split(","):
         tk = normalize_jp(code)
         if tk and tk not in universe:
@@ -470,8 +698,10 @@ def render_params() -> dict:
 
 
 def _vol_row(tk: str, held: list[str]) -> dict | None:
-    """一覧テーブル用の1行を作成。"""
+    """一覧テーブル用の1行を作成。未取得の銘柄は通信せず名前とコードだけ表示。"""
     ss = st.session_state
+    if not has_local(tk):
+        return {"銘柄": label_of(tk), "状態": "⏳ 未取得（実行/一括DLで取得）"}
     v = predict_vol(tk)
     if v is None:
         return None
@@ -507,6 +737,12 @@ def render_vol_table(universe: list[str]) -> None:
     labels = [label_of(t) for t in tickers]
     sel = st.selectbox("銘柄を選択", labels, key="vol_select")
     tk = tickers[labels.index(sel)]
+
+    # 未取得の銘柄は選択しても通信しない（実行時 or 一括DLで取得）
+    if not has_local(tk):
+        st.info(f"{label_of(tk)} のデータは未取得です。"
+                "「▶️ 今すぐ1サイクル実行」またはサイドバーの「⬇️ 一括DL」で取得されます。")
+        return
 
     v = predict_vol(tk)
     if v is None:
@@ -550,11 +786,13 @@ def render_vol_table(universe: list[str]) -> None:
 def render_positions() -> None:
     """保有ポジションと監視ラインの一覧。"""
     ss = st.session_state
+    held = tuple(t for t, p in ss.positions.items() if getattr(p, "shares", 0) > 0)
+    prices = get_prices(held)  # 1回の通信でまとめて取得
     rows = []
     for tk, pos in ss.positions.items():
         if getattr(pos, "shares", 0) <= 0:
             continue
-        price = get_price(tk)
+        price = prices.get(tk)
         tgt = ss.auto_targets.get(tk)
         pnl = (price - pos.cost_basis) * pos.shares if price else None
         rows.append({
@@ -615,6 +853,11 @@ def main() -> None:
     if yf is None:
         st.error("`yfinance` がインストールされていません。`pip install yfinance` を実行してください。")
         st.stop()
+
+    err = jpx_error()
+    if err:
+        st.warning(f"⚠️ JPX銘柄一覧を取得できませんでした（{err}）。フォールバックの銘柄のみで動作します。"
+                   "サイドバーの「📥 銘柄一覧を再取得」をお試しください。")
 
     risk_on, entry_on, _ = render_sidebar()
     params = render_params()

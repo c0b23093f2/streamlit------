@@ -1,6 +1,7 @@
 """
 株式デモトレード（ペーパートレード）アプリ — 日本株専用
 - データソース: yfinance（Yahoo Finance の実データ）
+- 銘柄リスト: JPX「東証上場銘柄一覧」を自動取得（全上場銘柄 約3,900社に対応）
 - 機能: 成行売買、ポートフォリオ管理、現金残高、損益表示、価格チャート、取引履歴、自動価格更新
 
 実行方法:
@@ -12,12 +13,15 @@
     pages/
         stock_detail.py   ← 銘柄詳細ページ（検索した銘柄のデータをDL保存して表示）
         auto_trade.py     ← 自動売買（ボラ予測・自動損切り/利確・自動エントリー）
-    data/                 ← 銘柄データの保存先（自動生成）
+    data/                 ← 銘柄データ・JPX銘柄一覧の保存先（自動生成）
 """
-
+#---------------------------------------------
+#梅村
+#---------------------------------------------
 from __future__ import annotations
 
 import datetime as dt
+import os
 from dataclasses import dataclass
 
 import pandas as pd
@@ -33,6 +37,7 @@ except ImportError:  # pragma: no cover
 # ---------------------------------------------------------------------------
 INITIAL_CASH = 1_000_000  # 初期資金（円）
 DEFAULT_TICKERS = ["7203.T", "9984.T", "6758.T", "8306.T", "9432.T", "6861.T", "8035.T", "7974.T"]
+# JPX一覧の取得に失敗したときのフォールバック用
 TICKER_NAMES = {
     "7203.T": "トヨタ自動車",
     "9984.T": "ソフトバンクG",
@@ -44,6 +49,10 @@ TICKER_NAMES = {
     "7974.T": "任天堂",
 }
 CACHE_TTL = 30  # 価格キャッシュの秒数（自動更新の実質的な間隔）
+
+# JPX 東証上場銘柄一覧（月次更新の公式Excel）
+JPX_LIST_URL = "https://www.jpx.co.jp/markets/statistics-equity/misc/tvdivq0000001vg2-att/data_j.xls"
+JPX_CSV = "data/jpx_list.csv"
 
 UP = "#16c784"    # 上昇・利益
 DOWN = "#ea3943"  # 下落・損失
@@ -111,8 +120,34 @@ def normalize_jp(code: str) -> str:
     return f"{code.replace('.T', '')}.T"
 
 
+# ---------------------------------------------------------------------------
+# 銘柄一覧（JPX 全上場銘柄）
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=24 * 3600, show_spinner="銘柄一覧を取得中...")
+def load_all_names() -> dict[str, str]:
+    """JPXの全上場銘柄一覧を取得し {ティッカー: 銘柄名} を返す。
+
+    - 初回はJPXからExcelをダウンロードして data/jpx_list.csv に保存
+    - 2回目以降はローカルCSVを読むだけ（高速・オフラインOK）
+    - 取得失敗時は手動辞書 TICKER_NAMES にフォールバック
+    """
+    try:
+        if os.path.exists(JPX_CSV):
+            df = pd.read_csv(JPX_CSV, dtype=str)
+        else:
+            df = pd.read_excel(JPX_LIST_URL, dtype=str)  # 要 xlrd
+            # ETF・REIT等を除き、国内株式（プライム/スタンダード/グロース）のみ
+            df = df[df["市場・商品区分"].str.contains("プライム|スタンダード|グロース", na=False)]
+            df = df[["コード", "銘柄名"]]
+            os.makedirs("data", exist_ok=True)
+            df.to_csv(JPX_CSV, index=False)
+        return {f"{c}.T": n for c, n in zip(df["コード"], df["銘柄名"])}
+    except Exception:
+        return dict(TICKER_NAMES)
+
+
 def label_of(ticker: str) -> str:
-    name = TICKER_NAMES.get(ticker)
+    name = load_all_names().get(ticker) or TICKER_NAMES.get(ticker)
     return f"{name}（{ticker}）" if name else ticker
 
 
@@ -249,9 +284,10 @@ def render_sidebar() -> None:
         st.divider()
         st.markdown("#### クイック銘柄")
         st.caption("クリックで取引欄にセット")
+        names = load_all_names()
         cols = st.columns(2)
         for i, tk in enumerate(DEFAULT_TICKERS):
-            name = TICKER_NAMES.get(tk, tk)
+            name = names.get(tk, TICKER_NAMES.get(tk, tk))
             if cols[i % 2].button(name, key=f"q_{tk}", use_container_width=True):
                 ss["chart_code"] = tk.replace(".T", "")
                 ss["trade_code"] = tk.replace(".T", "")  # 注文フォームにも反映
@@ -391,8 +427,27 @@ def daily_rangebreaks(df: pd.DataFrame) -> list[dict]:
         return [dict(bounds=["sat", "mon"])]
 
 
+def _apply_stock_search() -> None:
+    """銘柄検索の選択をチャート・注文フォームに反映（on_changeコールバック）。"""
+    t = st.session_state.get("stock_search", "")
+    if t:
+        code = t.replace(".T", "")
+        st.session_state["chart_code"] = code
+        st.session_state["trade_code"] = code
+
+
 def render_chart() -> None:
     st.markdown("### 📈 価格チャート")
+
+    # --- 全銘柄検索（JPX一覧 約3,900社から社名・コードで絞り込み） ---
+    names = load_all_names()
+    st.selectbox(
+        f"🔍 銘柄検索（全{len(names):,}銘柄・社名やコードを入力で絞り込み）",
+        [""] + sorted(names),
+        key="stock_search",
+        format_func=lambda t: f"{names.get(t, t)}（{t.replace('.T', '')}）" if t else "— 選択してください —",
+        on_change=_apply_stock_search,
+    )
 
     col1, col2 = st.columns([2, 1.3])
     code = col1.text_input("証券コード", key="chart_code", placeholder="例: 7203",
@@ -437,7 +492,7 @@ def render_chart() -> None:
     )
 
     if not ticker:
-        st.info("証券コードを入力してください。")
+        st.info("証券コードを入力するか、銘柄検索から選択してください。")
         return
 
     interval_map = {"1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d", "5y": "1wk"}
@@ -551,7 +606,7 @@ def render_trade_form() -> None:
     price = get_price(ticker) if ticker else None
 
     if not ticker:
-        st.info("左側のチャートで銘柄コードを入力するか、サイドバーのクイック銘柄をクリックしてください。")
+        st.info("左側のチャートで銘柄を検索するか、サイドバーのクイック銘柄をクリックしてください。")
         return
 
     if price is None:
@@ -600,7 +655,7 @@ def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="app-header"><h1>📈 株式デモトレード</h1>'
-        '<p>yfinance（Yahoo Finance）の実データを使った日本株ペーパートレード</p></div>',
+        '<p>yfinance（Yahoo Finance）の実データを使った日本株ペーパートレード — 全上場銘柄対応</p></div>',
         unsafe_allow_html=True,
     )
     if yf is None:
