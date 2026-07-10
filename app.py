@@ -9,11 +9,9 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -30,7 +28,7 @@ st.set_page_config(
     page_title="うめぇ〜go株",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 UP = "#16c784"
@@ -38,13 +36,6 @@ DOWN = "#ea3943"
 ACCENT = "#5b8def"
 ACCENT_LIGHT = "#7ca5f0"
 INITIAL_CASH = 1_000_000
-
-# サーバーがどのタイムゾーンで動いていても、常に日本時間で表示する
-JST = ZoneInfo("Asia/Tokyo")
-
-
-def now_jst() -> dt.datetime:
-    return dt.datetime.now(JST)
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "favorites.db"
@@ -95,9 +86,10 @@ CSS = """
 <style>
 /* ===========================================================================
    うめぇ〜go株 PRO ダッシュボードテーマ
-   （紺〜青グラデーション基調のカードダッシュボードUI）
+   （ライトモード / ダークモード 完全対応版）
 =========================================================================== */
 
+/* ===== ライトモード（デフォルト） ===== */
 :root {
     --bg: #f5f7fb;
     --card: #ffffff;
@@ -109,10 +101,33 @@ CSS = """
     --blue-3: #7ca5f0;
     --up: #16c784;
     --down: #ea3943;
+    --tag-bg: #f0f4ff;
+    --tag-border: #e1e9fb;
+    --table-header: #f7f9fd;
+    --news-thumb: #dbe6fb;
+    --widget-light-bg: #f7f9fd;
 }
 
+/* ===== ダークモード（Chrome/OS が暗い場合に自動適用） ===== */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0e1117;          /* Streamlit 默认深色背景 */
+        --card: #262730;        /* 深色卡片背景 */
+        --border: #3e4049;      /* 深色边框 */
+        --text-main: #f0f2f6;   /* 浅色主字体 */
+        --text-sub: #a3a8b8;    /* 浅色副字体 */
+        --tag-bg: rgba(79, 125, 243, 0.15);
+        --tag-border: #3e4049;
+        --table-header: #262730;
+        --news-thumb: #1f2128;
+        --widget-light-bg: #262730;
+    }
+}
+
+/* ===== 全局背景 ===== */
 html, body, [data-testid="stAppViewContainer"] {
     background: var(--bg) !important;
+    color: var(--text-main) !important;
 }
 
 .block-container {
@@ -123,16 +138,17 @@ html, body, [data-testid="stAppViewContainer"] {
 #MainMenu, footer { visibility: hidden; }
 
 header[data-testid="stHeader"] {
-    background: rgba(245,247,251,0.9);
+    background: transparent !important;
     backdrop-filter: blur(10px);
     box-shadow: none;
     height: 0px !important;
     padding: 0px !important;
 }
+
 /* =========================== サイドバー =========================== */
 section[data-testid="stSidebar"] {
-    background: #ffffff;
-    border-right: 1px solid var(--border);
+    background: var(--card) !important;
+    border-right: 1px solid var(--border) !important;
 }
 section[data-testid="stSidebar"] > div {
     padding-top: 1.1rem;
@@ -172,7 +188,6 @@ section[data-testid="stSidebar"] > div {
     letter-spacing: 0.5px;
 }
 
-/* サイドバーのナビゲーションリンク */
 section[data-testid="stSidebar"] div[data-testid="stPageLink"] {
     border-radius: 10px !important;
     margin: 2px 0.4rem !important;
@@ -183,11 +198,11 @@ section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] {
     padding: 9px 12px !important;
     font-size: 0.86rem !important;
     font-weight: 600 !important;
-    color: #56617a !important;
+    color: var(--text-sub) !important;
     border-radius: 10px !important;
 }
 section[data-testid="stSidebar"] div[data-testid="stPageLink"]:hover {
-    background: #f0f4ff;
+    background: rgba(79,125,243,0.1);
 }
 section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     color: var(--blue-2) !important;
@@ -215,7 +230,7 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     margin: 0.7rem 0.4rem 0 0.4rem;
     border-radius: 16px;
     padding: 14px 16px;
-    background: #f7f9fd;
+    background: var(--widget-light-bg);
     border: 1px solid var(--border);
 }
 .side-widget-light .sw-label { font-size: 0.68rem; color: var(--text-sub); font-weight: 700; display:flex; justify-content:space-between; }
@@ -223,21 +238,19 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
 .side-widget-light .sw-sub   { font-size: 0.72rem; margin-top: 3px; font-weight: 700; }
 
 /* =========================== トップバー =========================== */
-/* 原来是 padding: 0.1rem 0 1.1rem 0; 改成下面这样增加顶部距离 */
-/* =========================== トップバー =========================== */
 .topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.2rem 0 1.1rem 0; /* 整体稍微下来一点 */
+    padding: 0.2rem 0 1.1rem 0;
     flex-wrap: wrap;
 }
 .topbar-time {
     color: var(--text-sub);
     font-size: 0.72rem;
     font-weight: 600;
-    background: #ffffff;
+    background: var(--card);
     border: 1px solid var(--border);
     padding: 6px 16px;
     border-radius: 30px;
@@ -245,7 +258,6 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     align-items: center;
     gap: 8px;
     white-space: nowrap;
-    /* 保持居中 */
     margin-top: 10px; 
 }
 .topbar-time .dot {
@@ -254,14 +266,15 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     display: inline-block;
     box-shadow: 0 0 0 3px rgba(22,199,132,0.15);
 }
-/* 专门针对右上角搜索框的内部微调 */
 .topbar-search input {
     border-radius: 30px !important;
-    background: #ffffff !important;
+    background: var(--card) !important;
     border: 1px solid var(--border) !important;
-    height: 38px !important;   /* 强制让输入框变矮一点，美观 */
-    margin-top: 14px !important; /* 这里最关键：强行把输入框往下推 14 像素 */
+    height: 38px !important;
+    margin-top: 14px !important;
+    color: var(--text-main) !important;
 }
+
 /* =========================== グラデーションヒーロー =========================== */
 .gradient-header {
     background: linear-gradient(150deg, #1a2a6c 0%, #4f7df3 55%, #6c9cf5 100%);
@@ -281,14 +294,8 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     background: radial-gradient(ellipse, rgba(255,255,255,0.08) 0%, transparent 70%);
     pointer-events: none;
 }
-.gradient-header h2 {
-    margin: 0; font-size: 1.45rem; font-weight: 800;
-    letter-spacing: -0.3px; position: relative; z-index: 1;
-}
-.gradient-header p {
-    margin: 5px 0 0; opacity: 0.88; font-size: 0.84rem;
-    position: relative; z-index: 1;
-}
+.gradient-header h2 { margin: 0; font-size: 1.45rem; font-weight: 800; letter-spacing: -0.3px; position: relative; z-index: 1; }
+.gradient-header p { margin: 5px 0 0; opacity: 0.88; font-size: 0.84rem; position: relative; z-index: 1; }
 
 /* =========================== カード（統計・指標） =========================== */
 .original-card {
@@ -298,29 +305,15 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     padding: 16px 18px;
     height: 100%;
     box-shadow: 0 2px 12px rgba(20,30,60,.04);
-}
-.original-card .label {
-    font-size: .74rem;
-    color: var(--text-sub);
-    font-weight: 700;
-}
-.original-card .value {
-    font-size: 1.4rem;
-    font-weight: 800;
-    margin-top: 5px;
-    line-height: 1.15;
     color: var(--text-main);
 }
-.original-card .sub {
-    font-size: .8rem;
-    margin-top: 3px;
-    font-weight: 700;
-}
+.original-card .label { font-size: .74rem; color: var(--text-sub); font-weight: 700; }
+.original-card .value { font-size: 1.4rem; font-weight: 800; margin-top: 5px; line-height: 1.15; color: var(--text-main); }
+.original-card .sub { font-size: .8rem; margin-top: 3px; font-weight: 700; }
 .up { color: var(--up); }
 .down { color: var(--down); }
 .muted { color: var(--text-sub); }
 
-/* 見出しカード（ランキング・保有一覧などの白カードコンテナ） */
 .panel-card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -329,16 +322,11 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     box-shadow: 0 2px 14px rgba(20,30,60,.04);
     margin-bottom: 1.1rem;
 }
-.panel-title {
-    font-size: 0.98rem;
-    font-weight: 800;
-    color: var(--text-main);
-    margin-bottom: 4px;
-}
+.panel-title { font-size: 0.98rem; font-weight: 800; color: var(--text-main); margin-bottom: 4px; }
 
-/* 検索結果カード */
+/* =========================== 検索結果カード =========================== */
 .result-item {
-    background: #ffffff;
+    background: var(--card);
     border: 1px solid var(--border);
     border-radius: 16px;
     padding: 12px 16px;
@@ -350,55 +338,29 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     gap: 10px;
     transition: all 0.18s ease;
 }
-.result-item:hover {
-    border-color: #cfdcf7;
-    box-shadow: 0 6px 18px rgba(79,125,243,0.08);
-}
-.result-item .ri-name {
-    font-weight: 700;
-    font-size: 0.95rem;
-    color: var(--text-main);
-}
-.result-item .ri-code {
-    font-size: 0.75rem;
-    color: var(--text-sub);
-    font-weight: 600;
-}
-.result-item .ri-price {
-    font-weight: 800;
-    font-size: 1.05rem;
-    color: var(--text-main);
-}
-.result-item .ri-actions {
-    display: flex;
-    gap: 6px;
-}
+.result-item:hover { border-color: #cfdcf7; box-shadow: 0 6px 18px rgba(79,125,243,0.08); }
+.result-item .ri-name { font-weight: 700; font-size: 0.95rem; color: var(--text-main); }
+.result-item .ri-code { font-size: 0.75rem; color: var(--text-sub); font-weight: 600; }
+.result-item .ri-price { font-weight: 800; font-size: 1.05rem; color: var(--text-main); }
+.result-item .ri-actions { display: flex; gap: 6px; }
 
-/* クイックタグ */
-.quick-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 8px 0 4px 0;
-}
+/* =========================== クイックタグ =========================== */
+.quick-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px 0; }
 .quick-tags .stButton button {
     border-radius: 30px !important;
     padding: 4px 16px !important;
     font-size: 0.75rem !important;
-    background: #f0f4ff !important;
-    border: 1px solid #e1e9fb !important;
+    background: var(--tag-bg) !important;
+    border: 1px solid var(--tag-border) !important;
     color: var(--blue-2) !important;
     font-weight: 700 !important;
 }
-.quick-tags .stButton button:hover {
-    background: #e1eaff !important;
-    border-color: #c6d7fa !important;
-}
+.quick-tags .stButton button:hover { background: #e1eaff !important; border-color: #c6d7fa !important; }
 
-/* タブ */
+/* =========================== タブ =========================== */
 .stTabs [data-baseweb="tab-list"] {
     gap: 4px;
-    background: #f0f3f9;
+    background: var(--bg);
     border-radius: 14px;
     padding: 5px;
     border: 1px solid var(--border);
@@ -408,22 +370,19 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     padding: 6px 18px;
     font-weight: 600;
     font-size: 0.82rem;
-    color: #6b7a8e;
+    color: var(--text-sub);
     transition: all 0.15s ease;
     background: transparent !important;
 }
-.stTabs [data-baseweb="tab"]:hover {
-    background: #e6ecfb !important;
-    color: #1f2937;
-}
+.stTabs [data-baseweb="tab"]:hover { background: rgba(79,125,243,0.15) !important; }
 .stTabs [aria-selected="true"] {
-    background: #ffffff !important;
+    background: var(--card) !important;
     color: var(--blue-2) !important;
     box-shadow: 0 2px 12px rgba(79,125,243,0.12);
     font-weight: 800;
 }
 
-/* ボタン */
+/* =========================== ボタン =========================== */
 .stButton > button {
     border-radius: 30px !important;
     font-weight: 700 !important;
@@ -436,49 +395,33 @@ section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
     background: linear-gradient(145deg, var(--blue-2), #2d5bd9) !important;
     border: none !important;
     box-shadow: 0 6px 16px rgba(79,125,243,0.3) !important;
+    color: #fff !important;
 }
 
-/* データフレーム */
+/* =========================== データフレーム =========================== */
 div[data-testid="stDataFrame"] {
     border-radius: 16px !important;
     overflow: hidden !important;
     border: 1px solid var(--border) !important;
+    background: var(--card) !important;
 }
 div[data-testid="stDataFrame"] thead tr th {
-    background: #f7f9fd !important;
+    background: var(--table-header) !important;
     font-weight: 700 !important;
     font-size: 0.7rem !important;
-    color: #4a5a6e !important;
+    color: var(--text-main) !important;
     text-transform: uppercase !important;
     letter-spacing: 0.4px !important;
     padding: 8px 12px !important;
 }
 
-/* ランキングリスト（値上がり/値下がり風） */
-.rank-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 4px;
-    border-bottom: 1px solid #f2f4f8;
-    gap: 10px;
-}
-.rank-row:last-child { border-bottom: none; }
-.rank-badge {
-    width: 20px; height: 20px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.68rem; font-weight: 800; color: #fff;
-    flex-shrink: 0;
-}
-
-/* メニューポップオーバー（互換のため保持） */
+/* =========================== ポップオーバー =========================== */
 div[data-testid="stPopover"] {
     border-radius: 16px !important;
     border: 1px solid var(--border) !important;
     box-shadow: 0 16px 48px rgba(0,0,0,0.10) !important;
     padding: 0.3rem 0 !important;
-    background: rgba(255,255,255,0.97) !important;
+    background: var(--card) !important;
     backdrop-filter: blur(12px) !important;
 }
 div[data-testid="stPopover"] a {
@@ -489,17 +432,14 @@ div[data-testid="stPopover"] a {
     border-radius: 10px !important;
     transition: all 0.12s !important;
     text-decoration: none !important;
-    color: #1f2937 !important;
+    color: var(--text-main) !important;
     font-weight: 600 !important;
     font-size: 0.85rem !important;
     margin: 2px 6px !important;
 }
-div[data-testid="stPopover"] a:hover {
-    background: #f0f4ff !important;
-    color: var(--blue-2) !important;
-}
+div[data-testid="stPopover"] a:hover { background: var(--tag-bg) !important; color: var(--blue-2) !important; }
 
-/* =========================== ダッシュボード：ヒーローカード =========================== */
+/* =========================== ヒーローカード =========================== */
 .hero-card {
     background: linear-gradient(150deg, #1a2a6c 0%, #3f6bea 55%, #6c9cf5 100%);
     border-radius: 18px;
@@ -519,18 +459,9 @@ div[data-testid="stPopover"] a:hover {
     border-radius: 50%;
     background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, transparent 70%);
 }
-.hero-top {
-    display: flex; align-items: center; justify-content: space-between;
-    font-size: 0.8rem; font-weight: 700; opacity: 0.92; position: relative; z-index: 1;
-}
-.hero-value {
-    font-size: 2rem; font-weight: 800; margin-top: 10px;
-    position: relative; z-index: 1; letter-spacing: -0.5px;
-}
-.hero-sub {
-    font-size: 0.82rem; font-weight: 700; margin-top: 6px;
-    position: relative; z-index: 1; opacity: 0.95;
-}
+.hero-top { display: flex; align-items: center; justify-content: space-between; font-size: 0.8rem; font-weight: 700; opacity: 0.92; position: relative; z-index: 1; }
+.hero-value { font-size: 2rem; font-weight: 800; margin-top: 10px; position: relative; z-index: 1; letter-spacing: -0.5px; }
+.hero-sub { font-size: 0.82rem; font-weight: 700; margin-top: 6px; position: relative; z-index: 1; opacity: 0.95; }
 
 /* =========================== 統計ミニカード =========================== */
 .stat-mini {
@@ -548,17 +479,13 @@ div[data-testid="stPopover"] a:hover {
 .stat-mini .sm-label { font-size: 0.72rem; color: var(--text-sub); font-weight: 700; }
 .stat-mini .sm-value { font-size: 1.28rem; font-weight: 800; color: var(--text-main); margin-top: 8px; }
 .stat-mini .sm-sub { font-size: 0.76rem; font-weight: 700; margin-top: 4px; }
-.stat-mini .sm-icon {
-    width: 34px; height: 34px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1rem; align-self: flex-end; margin-top: 8px;
-}
-.icon-teal   { background: #e3fbf1; }
-.icon-green  { background: #e5faf0; }
-.icon-gold   { background: #fff6df; }
-.icon-blue   { background: #eaf1ff; }
+.stat-mini .sm-icon { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1rem; align-self: flex-end; margin-top: 8px; }
+.icon-teal { background: #e3fbf1; }
+.icon-green { background: #e5faf0; }
+.icon-gold { background: #fff6df; }
+.icon-blue { background: #eaf1ff; }
 
-/* =========================== パネルカード（コンテナ枠を統一） =========================== */
+/* =========================== パネルカード =========================== */
 div[data-testid="stVerticalBlockBorderWrapper"] {
     background: var(--card) !important;
     border: 1px solid var(--border) !important;
@@ -566,130 +493,27 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
     box-shadow: 0 2px 14px rgba(20,30,60,.04) !important;
     padding: 4px 2px !important;
 }
-.panel-head {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 6px;
-}
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .panel-head .ph-title { font-size: 0.95rem; font-weight: 800; color: var(--text-main); }
 .panel-head .ph-more { font-size: 0.74rem; color: var(--blue-2); font-weight: 700; }
-
-/* =========================== ランキング行 =========================== */
-.rank-list { margin-top: 2px; }
-.rank-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 9px 2px;
-    border-bottom: 1px solid #f2f4f8;
-    gap: 10px;
-}
-.rank-row:last-child { border-bottom: none; }
-.rank-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.rank-badge {
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.68rem; font-weight: 800; color: #fff;
-    flex-shrink: 0;
-}
-.rank-name { font-size: 0.85rem; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rank-code { font-size: 0.68rem; color: var(--text-sub); font-weight: 600; }
-.rank-right { text-align: right; flex-shrink: 0; }
-.rank-price { font-size: 0.82rem; font-weight: 700; color: var(--text-main); }
-.rank-pct { font-size: 0.76rem; font-weight: 800; }
 
 /* =========================== ニュースカード =========================== */
 .news-item {
     display: flex; gap: 10px; align-items: flex-start;
-    padding: 9px 2px; border-bottom: 1px solid #f2f4f8;
+    padding: 9px 2px; border-bottom: 1px solid var(--border);
 }
 .news-item:last-child { border-bottom: none; }
 .news-thumb {
     width: 52px; height: 40px; border-radius: 8px; flex-shrink: 0;
-    background: linear-gradient(145deg, #dbe6fb, #eef2fb);
+    background: var(--news-thumb);
     display: flex; align-items: center; justify-content: center;
     font-size: 1.1rem; overflow: hidden;
 }
 .news-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.news-title {
-    font-size: 0.8rem; font-weight: 700; color: var(--text-main);
-    line-height: 1.35; margin: 0;
-}
+.news-title { font-size: 0.8rem; font-weight: 700; color: var(--text-main); line-height: 1.35; margin: 0; }
 .news-meta { font-size: 0.68rem; color: var(--text-sub); margin-top: 3px; font-weight: 600; }
 
-/* =========================== ダークモード端末向けフォールバック ===========================
-   .streamlit/config.toml が無い環境でも、明色デザインの文字が読めるように強制する */
-:root { color-scheme: light; }
-[data-testid="stAppViewContainer"], [data-testid="stSidebar"], [data-testid="stHeader"] {
-    color: var(--text-main);
-}
-[data-testid="stAppViewContainer"] p,
-[data-testid="stAppViewContainer"] li,
-[data-testid="stAppViewContainer"] label,
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] label {
-    color: inherit;
-}
-h1, h2, h3, h4, h5, h6 { color: var(--text-main) !important; }
-
-/* 入力欄・テキストエリア・セレクトボックスを白背景＋暗色文字に固定 */
-[data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="textarea"],
-[data-baseweb="select"] > div {
-    background: #ffffff !important;
-    border-color: var(--border) !important;
-}
-[data-baseweb="input"] input, [data-baseweb="base-input"] input,
-[data-baseweb="textarea"] textarea, [data-baseweb="select"] input {
-    color: var(--text-main) !important;
-    background: transparent !important;
-    caret-color: var(--text-main) !important;
-    -webkit-text-fill-color: var(--text-main) !important;
-}
-[data-baseweb="input"] input::placeholder,
-[data-baseweb="textarea"] textarea::placeholder {
-    color: var(--text-sub) !important;
-    -webkit-text-fill-color: var(--text-sub) !important;
-}
-[data-baseweb="select"] div { color: var(--text-main); }
-[data-baseweb="popover"] [role="listbox"], [data-baseweb="menu"] {
-    background: #ffffff !important;
-    color: var(--text-main) !important;
-}
-
-/* ラジオ・チェックボックス・エクスパンダー・各ウィジェットのラベル */
-[data-testid="stWidgetLabel"] p,
-[data-testid="stRadio"] label p,
-[data-testid="stCheckbox"] label p,
-[data-testid="stExpander"] summary,
-[data-testid="stExpander"] summary p,
-[data-testid="stMetricLabel"] p {
-    color: var(--text-main) !important;
-}
-[data-testid="stExpander"] details {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-}
-[data-testid="stMetricValue"] { color: var(--text-main) !important; }
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
-    color: var(--text-sub) !important;
-}
-
-/* 通常ボタン・ダウンロードボタンを白ベースに固定（primaryは青グラデのまま） */
-.stButton > button:not([kind="primary"]),
-.stDownloadButton > button {
-    background: #ffffff !important;
-    color: var(--text-main) !important;
-    border: 1px solid var(--border) !important;
-}
-/* クイックタグの配色は維持 */
-.quick-tags .stButton button {
-    background: #f0f4ff !important;
-    border: 1px solid #e1e9fb !important;
-    color: var(--blue-2) !important;
-}
-
-/* レスポンシブ */
+/* =========================== レスポンシブ =========================== */
 @media (max-width: 640px) {
     .result-item { flex-direction: column; align-items: stretch; }
     .result-item .ri-actions { justify-content: flex-end; }
@@ -957,80 +781,14 @@ def technical_judgment(df: pd.DataFrame) -> dict:
 # ---------------------------------------------------------------------------
 # お気に入り
 # ---------------------------------------------------------------------------
-def _secret_db_url() -> str:
-    """Streamlit Secrets の DATABASE_URL（外部DB）。
-    設定されていれば PostgreSQL 等の外部DBを使い、サーバー再起動後もデータが残る。
-    未設定ならローカルSQLite（再起動で消える環境あり）を使う。"""
-    try:
-        return str(st.secrets.get("DATABASE_URL", "") or "")
-    except Exception:
-        return ""
-
-
-DB_URL = _secret_db_url()
-
-_CREATE_USERS = (
-    "CREATE TABLE IF NOT EXISTS users ("
-    "username TEXT PRIMARY KEY, password TEXT, created_at TEXT, portfolio TEXT DEFAULT '')"
-)
-_CREATE_FAVS = (
-    "CREATE TABLE IF NOT EXISTS user_favorites ("
-    "username TEXT, code TEXT, name TEXT, note TEXT DEFAULT '', created_at TEXT, "
-    "PRIMARY KEY (username, code))"
-)
-
-
-def _normalize_db_url(url: str) -> str:
-    """接続文字列の書式ゆれを吸収し、psycopg(v3)ドライバを使うURLに揃える。"""
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    url = url.replace("postgresql+psycopg2://", "postgresql://")
-    if url.startswith("postgresql://"):
-        url = "postgresql+psycopg://" + url[len("postgresql://"):]
-    return url
-
-
-@st.cache_resource(show_spinner=False)
-def _engine():
-    """外部DB（PostgreSQL等）のエンジンを作成し、テーブルを初期化する。"""
-    from sqlalchemy import create_engine, text
-    eng = create_engine(_normalize_db_url(DB_URL), pool_pre_ping=True)
-    with eng.begin() as c:
-        c.execute(text(_CREATE_USERS))
-        c.execute(text(_CREATE_FAVS))
-    return eng
-
-
 def _db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(_CREATE_USERS)
-    conn.execute(_CREATE_FAVS)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS favorites ("
+        "code TEXT PRIMARY KEY, name TEXT, note TEXT DEFAULT '', created_at TEXT)"
+    )
     return conn
-
-
-def _db_exec(sql: str, params: dict | None = None) -> int:
-    """INSERT/UPDATE/DELETE を実行し、影響行数を返す（:name 形式のパラメータ）。"""
-    if DB_URL:
-        from sqlalchemy import text
-        with _engine().begin() as c:
-            return c.execute(text(sql), params or {}).rowcount
-    with _db() as conn:
-        return conn.execute(sql, params or {}).rowcount
-
-
-def _db_fetchall(sql: str, params: dict | None = None) -> list[tuple]:
-    if DB_URL:
-        from sqlalchemy import text
-        with _engine().connect() as c:
-            return [tuple(r) for r in c.execute(text(sql), params or {}).fetchall()]
-    with _db() as conn:
-        return conn.execute(sql, params or {}).fetchall()
-
-
-def _db_fetchone(sql: str, params: dict | None = None) -> tuple | None:
-    rows = _db_fetchall(sql, params)
-    return rows[0] if rows else None
 
 
 def _mem() -> dict:
@@ -1041,86 +799,13 @@ def _use_mem() -> None:
     st.session_state["fav_persist_err"] = True
 
 
-def current_user() -> str:
-    return st.session_state.get("user", "")
-
-
-# --- ユーザー管理（学習用のため平文保存。セキュリティは考慮しない） ---
-def user_create(username: str, password: str) -> bool:
-    """作成できたら True、既に存在すれば False。"""
-    now = now_jst().strftime("%Y/%m/%d %H:%M")
-    try:
-        n = _db_exec(
-            "INSERT INTO users (username, password, created_at) VALUES (:u, :p, :c) "
-            "ON CONFLICT (username) DO NOTHING",
-            {"u": username, "p": password, "c": now},
-        )
-        return n > 0
-    except Exception:
-        _use_mem()
-        users = st.session_state.setdefault("users_mem", {})
-        if username in users:
-            return False
-        users[username] = password
-        return True
-
-
-def user_verify(username: str, password: str) -> bool:
-    try:
-        row = _db_fetchone("SELECT password FROM users WHERE username=:u", {"u": username})
-        return row is not None and row[0] == password
-    except Exception:
-        _use_mem()
-        return st.session_state.get("users_mem", {}).get(username) == password
-
-
-# --- ポートフォリオ（デモトレード）のアカウント別保存 ---
-def portfolio_save() -> None:
-    user = current_user()
-    if not user:
-        return
-    ss = st.session_state
-    data = {
-        "cash": ss.get("cash", float(INITIAL_CASH)),
-        "positions": {t: [p.shares, p.cost_basis] for t, p in ss.get("positions", {}).items()},
-        "trades": ss.get("trades", []),
-    }
-    try:
-        _db_exec("UPDATE users SET portfolio=:p WHERE username=:u",
-                 {"p": json.dumps(data, ensure_ascii=False), "u": user})
-    except Exception:
-        _use_mem()  # フォールバック環境ではセッション内のみ保持
-
-
-def portfolio_load(user: str) -> None:
-    """ログイン時に、そのユーザーのポートフォリオをセッションに読み込む。"""
-    ss = st.session_state
-    ss["cash"] = float(INITIAL_CASH)
-    ss["positions"] = {}
-    ss["trades"] = []
-    try:
-        row = _db_fetchone("SELECT portfolio FROM users WHERE username=:u", {"u": user})
-        if row and row[0]:
-            d = json.loads(row[0])
-            ss["cash"] = float(d.get("cash", INITIAL_CASH))
-            ss["positions"] = {t: Position(int(v[0]), float(v[1]))
-                               for t, v in d.get("positions", {}).items()}
-            ss["trades"] = list(d.get("trades", []))
-    except Exception:
-        pass
-
-
-# --- お気に入り（アカウント別） ---
 def fav_all() -> pd.DataFrame:
     cols = ["code", "name", "note", "created_at"]
     try:
-        rows = _db_fetchall(
-            "SELECT code, name, note, created_at FROM user_favorites "
-            "WHERE username=:u ORDER BY created_at DESC",
-            {"u": current_user()},
-        )
-        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
-    except Exception:
+        with _db() as conn:
+            df = pd.read_sql_query("SELECT * FROM favorites ORDER BY created_at DESC", conn)
+        return df if not df.empty else pd.DataFrame(columns=cols)
+    except sqlite3.Error:
         _use_mem()
         rows = [{"code": k, **v} for k, v in _mem().items()]
         return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
@@ -1128,41 +813,40 @@ def fav_all() -> pd.DataFrame:
 
 def fav_codes() -> set[str]:
     try:
-        rows = _db_fetchall("SELECT code FROM user_favorites WHERE username=:u",
-                            {"u": current_user()})
-        return {r[0] for r in rows}
-    except Exception:
+        with _db() as conn:
+            return {r[0] for r in conn.execute("SELECT code FROM favorites")}
+    except sqlite3.Error:
         _use_mem()
         return set(_mem())
 
 
 def fav_add(code: str, name: str) -> None:
-    now = now_jst().strftime("%Y/%m/%d %H:%M")
+    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
     try:
-        _db_exec(
-            "INSERT INTO user_favorites (username, code, name, note, created_at) "
-            "VALUES (:u, :c, :n, '', :t) ON CONFLICT (username, code) DO NOTHING",
-            {"u": current_user(), "c": code, "n": name, "t": now},
-        )
-    except Exception:
+        with _db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO favorites (code, name, note, created_at) VALUES (?,?,?,?)",
+                (code, name, "", now),
+            )
+    except sqlite3.Error:
         _use_mem()
         _mem().setdefault(code, {"name": name, "note": "", "created_at": now})
 
 
 def fav_remove(code: str) -> None:
     try:
-        _db_exec("DELETE FROM user_favorites WHERE username=:u AND code=:c",
-                 {"u": current_user(), "c": code})
-    except Exception:
+        with _db() as conn:
+            conn.execute("DELETE FROM favorites WHERE code=?", (code,))
+    except sqlite3.Error:
         _use_mem()
         _mem().pop(code, None)
 
 
 def fav_note(code: str, note: str) -> None:
     try:
-        _db_exec("UPDATE user_favorites SET note=:n WHERE username=:u AND code=:c",
-                 {"n": note, "u": current_user(), "c": code})
-    except Exception:
+        with _db() as conn:
+            conn.execute("UPDATE favorites SET note=? WHERE code=?", (note, code))
+    except sqlite3.Error:
         _use_mem()
         if code in _mem():
             _mem()[code]["note"] = note
@@ -1170,12 +854,11 @@ def fav_note(code: str, note: str) -> None:
 
 def fav_clear() -> int:
     try:
-        row = _db_fetchone("SELECT COUNT(*) FROM user_favorites WHERE username=:u",
-                           {"u": current_user()})
-        n = int(row[0]) if row else 0
-        _db_exec("DELETE FROM user_favorites WHERE username=:u", {"u": current_user()})
-        return n
-    except Exception:
+        with _db() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
+            conn.execute("DELETE FROM favorites")
+            return n
+    except sqlite3.Error:
         _use_mem()
         n = len(_mem())
         _mem().clear()
@@ -1236,14 +919,13 @@ def execute_trade(ticker: str, side: str, shares: int, price: float) -> tuple[bo
             pos.cost_basis = 0.0
     ss.positions[ticker] = pos
     ss.trades.append({
-        "日時": now_jst().strftime("%m-%d %H:%M:%S"),
+        "日時": dt.datetime.now().strftime("%m-%d %H:%M:%S"),
         "銘柄": label_of(ticker),
         "売買": side,
         "株数": shares,
         "価格": round(price, 1),
         "約定額": round(cost, 0),
     })
-    portfolio_save()
     return True, f"{side} 約定: {label_of(ticker)} {shares}株 @ ¥{price:,.1f}"
 
 
@@ -1259,20 +941,23 @@ def open_detail(code: str) -> None:
 # ページ: ホーム
 # ===========================================================================
 def _rank_panel(title: str, df_sorted: pd.DataFrame, key: str) -> None:
-    """値上がり率/値下がり率ランキングをスクリーンショット風のカードで表示する。"""
+    """値上がり率/値下がり率ランキングを表示（行選択で自動遷移）"""
     with st.container(border=True):
+        # 保持视觉标题，但不再作为跳转链接
         st.markdown(
             f'<div class="panel-head"><span class="ph-title">{title}</span>'
-            f'<span class="ph-more">クリックで詳細へ ›</span></div>',
+            f'<span class="ph-more">選択してクリックで詳細へ ›</span></div>',
             unsafe_allow_html=True,
         )
         df_show = df_sorted.head(5).reset_index(drop=True)
+        
+        # 使用 st.dataframe 并监听 selection
         event = st.dataframe(
             df_show[["銘柄名", "yahoo_code", "現在値", "前日比率"]],
             use_container_width=True,
             hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
+            on_select="rerun",          # 选中后自动刷新
+            selection_mode="single-row", # 只允许选择单行
             key=key,
             column_config={
                 "銘柄名": st.column_config.TextColumn("銘柄名"),
@@ -1280,51 +965,69 @@ def _rank_panel(title: str, df_sorted: pd.DataFrame, key: str) -> None:
                 "現在値": st.column_config.NumberColumn("現在値", format="%.1f"),
                 "前日比率": st.column_config.NumberColumn("前日比（%）", format="%+.2f"),
             },
-            height=232,
         )
+        
+        # 监听选择变化，如果有选中的行，立即跳转
         try:
             rows = list(event.selection.rows)
         except Exception:
             rows = []
+            
         if rows:
-            open_detail(str(df_show.iloc[rows[0]]["yahoo_code"]))
-
-
+            # 在跳转前清空选定状态，防止后续返回时重复跳转
+            st.session_state.pop(key, None)
+            # 获取选定行的股票代码并跳转
+            code = str(df_show.iloc[rows[0]]["yahoo_code"])
+            open_detail(code)
 def page_home() -> None:
     ss = st.session_state
     ss.setdefault("hist", [])
     ss.setdefault("_res", [])
     init_trade_state()
-
     # ---------------------------------------------------------------
-    # 検索バー（画面上部・スクリーンショットのトップ検索窓に相当）
+    # 検索バー
     # ---------------------------------------------------------------
-    col1, col2 = st.columns([5, 1])
+    col1, col2, col3 = st.columns([4, 1, 1])
+    
+    # 将输入框放在 col1
     kw = col1.text_input(
         "検索キーワード",
-        placeholder="銘柄名・コードを検索（例：トヨタ、7203.T）",
+        placeholder="例: 7203, トヨタ, 9984.T, 日経平均",
         label_visibility="collapsed",
-        key="skw",
+        key="skw"
     )
-    go = col2.button("🔍 検索", key="search_btn", use_container_width=True)
-
-    with st.expander("⚡ クイック銘柄 ／ 検索履歴", expanded=False):
-        st.markdown('<div class="quick-tags">', unsafe_allow_html=True)
-        qcols = st.columns(len(QUICK_TICKERS))
-        for i, tk in enumerate(QUICK_TICKERS):
-            label = CODE2NAME.get(tk, tk)
-            if qcols[i].button(label, key=f"q_{tk}", use_container_width=True):
-                open_detail(tk)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        if ss["hist"]:
-            st.caption(f"📜 検索履歴（{len(ss['hist'])}件）")
-            hcols = st.columns(4)
-            for i, h in enumerate(ss["hist"][-12:]):
-                if hcols[i % 4].button(h, key=f"h_{i}_{h}", use_container_width=True):
-                    ss["_sr"] = h
+    
+    # 这里加入一个新功能：如果搜索到了多个结果，显示下拉选择框
+    if kw and len(kw) >= 2: # 字数超过2个才开始搜索，避免卡顿
+        res = search_stock(kw)
+        if len(res) > 1:
+            # 构建下拉选项： "トヨタ自動車 (7203.T)" 这样的格式
+            options = {f"{r['name']} ({r['code']})": r['code'] for r in res}
+            selected_label = col2.selectbox(
+                "候補から選択",
+                options=list(options.keys()),
+                index=0,
+                label_visibility="collapsed",
+                key="search_select"
+            )
+            selected_code = options.get(selected_label)
+            if selected_code:
+                if col3.button("選択", type="primary", use_container_width=True):
+                    st.session_state["_sr"] = selected_code
                     st.rerun()
+        elif len(res) == 1:
+            # 如果精准匹配只有 1 个，直接填入 col1 的输入框，并提供一个快速前往按钮
+            col2.caption(f"✅ {res[0]['name']}")
+            if col3.button("前往", type="primary", use_container_width=True):
+                st.session_state["_sr"] = res[0]['code']
+                st.rerun()
+        else:
+            col2.caption("")
 
+    # 处理跳转（注意这里依然兼容原来的按钮逻辑）
+    go = col3.button("🔍 検索", key="search_btn", use_container_width=True)
+
+    # 如果有搜索历史点击或者指定跳转
     sr = ss.pop("_sr", "")
     if sr:
         kw, go = sr, True
@@ -1341,7 +1044,6 @@ def page_home() -> None:
         else:
             st.warning("❌ 該当する銘柄が見つかりませんでした")
             ss["_res"] = []
-
     if ss["_res"]:
         st.markdown("### 📋 検索結果")
         for idx, r in enumerate(ss["_res"]):
@@ -1466,7 +1168,7 @@ def page_home() -> None:
                         height=260, margin=dict(l=0, r=0, t=8, b=0),
                         template="plotly_white", showlegend=False, hovermode="x unified",
                     )
-                    st.plotly_chart(fig, use_container_width=True, theme=None)
+                    st.plotly_chart(fig, use_container_width=True)
                 except ImportError:
                     st.line_chart(n_df["Close"], height=260)
                 st.caption(
@@ -1583,64 +1285,70 @@ def page_home() -> None:
 # ===========================================================================
 # ページ: 銘柄詳細
 # ===========================================================================
-def resolve_symbol(k: str) -> str | None:
-    """入力文字列から実在する銘柄のティッカーを解決する。見つからなければ None。"""
-    k = (k or "").strip()
-    if not k:
-        return None
-    if k in JMAP:
-        return JMAP[k]
-    # 日本語名の部分一致
-    for name, code in JMAP.items():
-        if k in name or name in k:
-            return code
-    # コードとして解釈し、実在確認（企業情報 or 価格が取れるもののみ有効）
-    for cand in dict.fromkeys([normalize_jp(k), k.upper() if not k.isdigit() else ""]):
-        if not cand:
-            continue
-        info = get_info(cand)
-        if info and (info.get("longName") or info.get("shortName")):
-            return cand
-        if get_price(cand) is not None:
-            return cand
-    return None
-
-
 def page_detail() -> None:
     ss = st.session_state
-
+    
     with st.container():
         c1, c2 = st.columns([4, 1])
+        
         code_in = c1.text_input(
             "証券コード・銘柄名",
-            placeholder="例: 7203, トヨタ, AAPL",
+            placeholder="例: 7203.T, トヨタ, 9984.T, ^N225",
             label_visibility="collapsed",
-            key="detail_kw"
+            key="detail_kw",
+            help="4桁の数字（例: 7203）、.T付きコード（例: 7203.T）、または銘柄名（例: トヨタ）を入力してください"
         )
+        
         if c2.button("表示", type="primary", use_container_width=True) and code_in:
-            with st.spinner("銘柄を確認しています…"):
-                resolved = resolve_symbol(code_in)
-            if resolved:
-                ss["sym"] = resolved
-                st.rerun()
+            k = code_in.strip()
+            target_code = None
+            
+            if k in JMAP:
+                target_code = JMAP[k]
+            elif k.isdigit() and len(k) == 4:
+                target_code = f"{k}.T"
+            elif k.upper().endswith(".T") or k.startswith("^"):
+                target_code = k.upper()
+                
+            if target_code:
+                # 验证数据存在性
+                @st.cache_data(ttl=10, show_spinner=False)
+                def validate_price(code):
+                    if yf is None: return False
+                    try:
+                        data = yf.Ticker(code).history(period="1d")
+                        return not data.empty
+                    except:
+                        return False
+                
+                if validate_price(target_code):
+                    ss["sym"] = target_code
+                    st.rerun()
+                else:
+                    st.error(f"❌ 入力エラー：'{k}' は存在しない、またはデータを取得できない銘柄コードです。")
+                    ss["sym"] = None
             else:
-                st.error(f"「{code_in.strip()}」に該当する銘柄が見つかりませんでした。"
-                         "銘柄名または証券コード（例: 7203, トヨタ, AAPL）を確認してください。")
+                st.error(f"❌ 入力エラー：'{k}' は有効な銘柄コードではありません。形式をご確認ください（例：7203.T, トヨタ）。")
+                ss["sym"] = None
 
     sym = ss.get("sym")
     if not sym:
-        st.info("ホームで銘柄を検索するか、上の入力欄にコードを入力してください。")
+        st.info("上部の入力欄に正しい証券コード（例：7203.T）または銘柄名を入力して「表示」をクリックしてください。")
         return
 
+    # =================【核心修复区】=================
     info = get_info(sym)
-    # 実在しない銘柄（情報も価格も取得できない）は表示しない
-    if not (info and (info.get("longName") or info.get("shortName"))) and get_price(sym) is None:
-        st.warning(f"「{sym}」の銘柄情報を取得できませんでした。上の入力欄から検索し直してください。")
-        ss.pop("sym", None)
-        return
-    name = CODE2NAME.get(sym) or info.get("longName") or info.get("shortName") or sym
+    
+    # 【修复逻辑】永远优先使用 yfinance 官方返回的全名！
+    # 只有当 info 拿不到名字时，才去查简单的字典 CODE2NAME
+    if info and (info.get("longName") or info.get("shortName")):
+        name = info.get("longName") or info.get("shortName") or sym
+    else:
+        name = CODE2NAME.get(sym, sym)
+        
     cu = cur_of(sym)
     price = get_price(sym)
+    # ===============================================
 
     # 銘柄ヘッダー
     h1, h2 = st.columns([3, 1])
@@ -1649,7 +1357,8 @@ def page_detail() -> None:
         st.caption(f"コード: {sym}")
     with h2:
         fav_toggle_button(sym, name, key=f"fv_detail_{sym}")
-
+        
+    # ... 下面保持原样不变 ...
     # 価格と前日比
     hist5 = get_history(sym, "5d", "1d")
     chg = pct = None
@@ -1754,7 +1463,7 @@ def render_chart(sym: str) -> None:
     row_h = [heights[r] for r in rows]
     s = sum(row_h)
     fig = make_subplots(
-        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.03,
+        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.08,  # 把 0.03 改为 0.08 或 0.1
         row_heights=[h / s for h in row_h],
         subplot_titles=[("" if r == "price" else r) for r in rows]
     )
@@ -1811,7 +1520,7 @@ def render_chart(sym: str) -> None:
     fig.update_xaxes(rangeslider_visible=False)
     if interval == "1d":
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    st.plotly_chart(fig, use_container_width=True)
 
     rsi = df["RSI"].iloc[-1]
     macd_cross = "ゴールデンクロス気味" if df["MACD"].iloc[-1] > df["Signal"].iloc[-1] else "デッドクロス気味"
@@ -1899,7 +1608,7 @@ def render_prediction(sym: str) -> None:
         height=440,
         margin=dict(l=0, r=0, t=60, b=0)
     )
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    st.plotly_chart(fig, use_container_width=True)
 
     direction = "上昇" if trend > 0 else ("下落" if trend < 0 else "横ばい")
     st.metric("30営業日後の予測値（簡易）", f"{future[-1]:,.1f}", f"トレンド: {direction}（{trend:+.2f}/日）")
@@ -1952,7 +1661,7 @@ def render_earnings(sym: str) -> None:
                                    marker_color=[UP if v >= 0 else DOWN for v in ni.fillna(0)]))
             fig.update_layout(title="四半期純利益（億円）", template="plotly_white",
                               height=300, margin=dict(l=0, r=0, t=50, b=0))
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, use_container_width=True)
         except ImportError:
             pass
 
@@ -1989,7 +1698,7 @@ def page_favorites() -> None:
     st.markdown(
         '<div class="gradient-header">'
         '<h2>⭐ お気に入り銘柄</h2>'
-        '<p>お気に入りはアカウントごとに保存され、ログインすればいつでも見られます。</p>'
+        '<p>登録銘柄はこのPCの data/favorites.db に保存され、アプリを閉じても残ります</p>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -2111,7 +1820,7 @@ def page_favorites() -> None:
     st.download_button(
         "📥 CSVで保存",
         data=csv.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"お気に入り銘柄_{now_jst():%Y%m%d}.csv",
+        file_name=f"お気に入り銘柄_{dt.datetime.now():%Y%m%d}.csv",
         mime="text/csv"
     )
     
@@ -2312,7 +2021,6 @@ def page_trade() -> None:
             for k in ("cash", "positions", "trades"):
                 ss.pop(k, None)
             init_trade_state()
-            portfolio_save()
             st.rerun()
         st.caption("※ デモ（ペーパートレード）です。実際の取引は行われません。")
 
@@ -2397,85 +2105,14 @@ def _sidebar_nav(current_title: str) -> None:
             unsafe_allow_html=True,
         )
 
-        # アカウント情報 ＋ ログアウト
-        st.markdown(
-            '<div class="side-widget-light">'
-            '<div class="sw-label"><span>👤 ログイン中</span></div>'
-            f'<div class="sw-value" style="font-size:0.98rem;">{current_user()}</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("🚪 ログアウト", use_container_width=True, key="logout_btn"):
-            portfolio_save()
-            for k in ("user", "cash", "positions", "trades", "fav_mem", "sym"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
-
-def render_auth() -> None:
-    """ログイン / アカウント作成ページ（新デザイン）"""
-    _, center, _ = st.columns([1, 1.6, 1])
-    with center:
-        st.write("")
-        st.markdown(
-            '<div class="gradient-header">'
-            '<h2>📈 うめぇ〜go株</h2>'
-            '<p>IDとパスワードでログイン、または新規登録してください</p>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        tab_login, tab_signup = st.tabs(["🔑 ログイン", "🆕 アカウント作成"])
-
-        with tab_login:
-            u = st.text_input("ID（ユーザー名）", key="login_user")
-            p = st.text_input("パスワード", type="password", key="login_pass")
-            if st.button("ログイン", type="primary", use_container_width=True):
-                if user_verify(u.strip(), p):
-                    st.session_state["user"] = u.strip()
-                    portfolio_load(u.strip())
-                    st.rerun()
-                else:
-                    st.error("IDまたはパスワードが違います。")
-
-        with tab_signup:
-            u2 = st.text_input("ID（ユーザー名）", key="signup_user", placeholder="例: taro")
-            p2 = st.text_input("パスワード", type="password", key="signup_pass")
-            p3 = st.text_input("パスワード（確認）", type="password", key="signup_pass2")
-            if st.button("アカウントを作成", type="primary", use_container_width=True):
-                if not u2.strip() or not p2:
-                    st.error("IDとパスワードを入力してください。")
-                elif p2 != p3:
-                    st.error("確認用パスワードが一致しません。")
-                elif user_create(u2.strip(), p2):
-                    st.session_state["user"] = u2.strip()
-                    portfolio_load(u2.strip())
-                    st.rerun()
-                else:
-                    st.error("このIDは既に使われています。別のIDを入力してください。")
-
-        st.caption("※ 学習用アプリのためパスワードは平文で保存されます。普段使っているパスワードは入力しないでください。")
-        if not DB_URL:
-            st.caption("※ 外部データベース（DATABASE_URL）が未設定です。この状態ではサーバー再起動時に"
-                       "アカウントが消えることがあります。設定方法は README を参照してください。")
-
-
-def _on_global_search() -> None:
-    st.session_state["_sr"] = st.session_state.get("global_search", "")
-
 
 def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
+    nav = st.navigation([PG_HOME, PG_DETAIL, PG_FAV, PG_GLOSSARY, PG_TRADE], position="hidden")
 
     if yf is None:
         st.error("`yfinance` がインストールされていません。`pip install yfinance` を実行してください。")
         st.stop()
-
-    # 未ログインならログイン/新規登録ページのみ表示
-    if not st.session_state.get("user"):
-        render_auth()
-        return
-
-    nav = st.navigation([PG_HOME, PG_DETAIL, PG_FAV, PG_GLOSSARY, PG_TRADE], position="hidden")
 
     _sidebar_nav(nav.title)
 
@@ -2486,8 +2123,8 @@ def main() -> None:
         st.write("") # 占位，保持左侧清爽
     
     with c_mid:
-        now = now_jst()
-        market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 30) and now.weekday() < 5
+        now = dt.datetime.now()
+        market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 0) and now.weekday() < 5
         status_text = "市場は開いています" if market_open else "市場は閉じています"
         st.markdown(
             f'<div class="topbar-time" style="display:inline-flex; margin:0 auto;">'
@@ -2495,13 +2132,16 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    with c_search:
-        st.text_input(
+        with c_search:
+        # 把刚才那个 st.container(height=60) 删掉
+            st.text_input(
             "🔍 銘柄名・コードを検索",
             placeholder="例: トヨタ, 7203.T",
             label_visibility="collapsed",
             key="global_search",
-            on_change=_on_global_search,
+            on_change=lambda: st.session_state.update({"_sr": st.session_state.global_search}),
+            # 加上这一行，把 CSS 绑定到输入框的外层容器上
+            args=("topbar-search",) 
         )
     nav.run()
 
