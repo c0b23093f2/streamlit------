@@ -1,19 +1,21 @@
 """
-📈 うめぇ〜go株 — UI再設計版（修正）
+📈 うめぇ〜go株 — 統合版（1ファイル・マルチページ）
 
-修正点:
-- トップバーの高さを元に戻す
-- 銘柄詳細の指標表示を元のカードスタイルに戻す
+構成:
+    ホーム（銘柄検索・ランキング） → 銘柄詳細（チャート/テクニカル判定/予測/ニュース/決算）
+    左上の ☰ ハンバーガーメニューから 指標解説・お気に入り銘柄・デモトレード へ移動
+
+実行方法:
+    pip install -r requirements.txt
+    streamlit run app.py
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -30,21 +32,13 @@ st.set_page_config(
     page_title="うめぇ〜go株",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 UP = "#16c784"
 DOWN = "#ea3943"
 ACCENT = "#5b8def"
-ACCENT_LIGHT = "#7ca5f0"
-INITIAL_CASH = 1_000_000
-
-# サーバーがどのタイムゾーンで動いていても、常に日本時間で表示する
-JST = ZoneInfo("Asia/Tokyo")
-
-
-def now_jst() -> dt.datetime:
-    return dt.datetime.now(JST)
+INITIAL_CASH = 1_000_000  # デモトレード初期資金（円）
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "favorites.db"
@@ -81,550 +75,40 @@ JMAP = {
     "日経平均": "^N225", "日経平均株価": "^N225", "日経225": "^N225",
 }
 
+# ティッカー → 日本語名（JMAPの逆引き。最初に出た名前を採用）
 CODE2NAME: dict[str, str] = {}
 for _name, _code in JMAP.items():
     CODE2NAME.setdefault(_code, _name)
 
 QUICK_TICKERS = ["7203.T", "9984.T", "6758.T", "8306.T", "9432.T", "6861.T", "8035.T", "7974.T"]
+
+# ランキング対象（JMAP収載の個別銘柄）
 RANK_UNIVERSE = tuple(sorted({c for c in JMAP.values() if not c.startswith("^")}))
 
-# ===========================================================================
-# CSS（トップバー高さ修正・指標カードは元のスタイルに戻す）
-# ===========================================================================
 CSS = """
 <style>
-/* ===========================================================================
-   うめぇ〜go株 PRO ダッシュボードテーマ
-   （紺〜青グラデーション基調のカードダッシュボードUI）
-=========================================================================== */
-
-:root {
-    --bg: #f5f7fb;
-    --card: #ffffff;
-    --border: #eef1f6;
-    --text-main: #1a2234;
-    --text-sub: #8a94a6;
-    --blue-1: #1a2a6c;
-    --blue-2: #4f7df3;
-    --blue-3: #7ca5f0;
-    --up: #16c784;
-    --down: #ea3943;
-}
-
-html, body, [data-testid="stAppViewContainer"] {
-    background: var(--bg) !important;
-}
-
-.block-container {
-    padding-top: 0rem !important;
-    padding-bottom: 1rem !important;
-    max-width: 1360px !important;
-}
+.block-container { padding-top: 1.0rem; padding-bottom: 2rem; max-width: 1200px; }
 #MainMenu, footer { visibility: hidden; }
 
-header[data-testid="stHeader"] {
-    background: rgba(245,247,251,0.9);
-    backdrop-filter: blur(10px);
-    box-shadow: none;
-    height: 0px !important;
-    padding: 0px !important;
+.app-header {
+    background: linear-gradient(120deg, #1e3a8a 0%, #2563eb 55%, #3b82f6 100%);
+    border-radius: 16px; padding: 18px 24px; color: #fff; margin-bottom: 16px;
+    box-shadow: 0 8px 24px rgba(37,99,235,.25);
 }
-/* =========================== サイドバー =========================== */
-section[data-testid="stSidebar"] {
-    background: #ffffff;
-    border-right: 1px solid var(--border);
-}
-section[data-testid="stSidebar"] > div {
-    padding-top: 1.1rem;
-}
-.brand-box {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 0.4rem 1.1rem 0.4rem;
-    margin-bottom: 0.6rem;
-    border-bottom: 1px solid var(--border);
-}
-.brand-icon {
-    width: 34px; height: 34px;
-    border-radius: 10px;
-    background: linear-gradient(145deg, var(--blue-1), var(--blue-2));
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.1rem;
-    flex-shrink: 0;
-}
-.brand-name {
-    font-size: 1.02rem;
-    font-weight: 800;
-    color: var(--text-main);
-    letter-spacing: -0.3px;
-    line-height: 1.1;
-}
-.brand-badge {
-    display: inline-block;
-    margin-top: 2px;
-    background: linear-gradient(145deg, var(--blue-2), #2d5bd9);
-    color: #fff;
-    font-size: 0.55rem;
-    font-weight: 800;
-    padding: 1px 8px;
-    border-radius: 30px;
-    letter-spacing: 0.5px;
-}
+.app-header h1 { margin: 0; font-size: 1.4rem; font-weight: 700; }
+.app-header p { margin: 4px 0 0; opacity: .9; font-size: .82rem; }
 
-/* サイドバーのナビゲーションリンク */
-section[data-testid="stSidebar"] div[data-testid="stPageLink"] {
-    border-radius: 10px !important;
-    margin: 2px 0.4rem !important;
-    transition: all 0.14s ease;
+.card {
+    background: #ffffff; border: 1px solid rgba(128,128,128,.18);
+    border-radius: 14px; padding: 14px 16px; height: 100%;
+    box-shadow: 0 2px 10px rgba(0,0,0,.04);
 }
-section[data-testid="stSidebar"] div[data-testid="stPageLink"] a,
-section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] {
-    padding: 9px 12px !important;
-    font-size: 0.86rem !important;
-    font-weight: 600 !important;
-    color: #56617a !important;
-    border-radius: 10px !important;
-}
-section[data-testid="stSidebar"] div[data-testid="stPageLink"]:hover {
-    background: #f0f4ff;
-}
-section[data-testid="stSidebar"] div[data-testid="stPageLink"] a:hover {
-    color: var(--blue-2) !important;
-}
-.nav-active div[data-testid="stPageLink"] {
-    background: linear-gradient(145deg, var(--blue-2), #4471e8) !important;
-}
-.nav-active div[data-testid="stPageLink"] a,
-.nav-active a[data-testid="stPageLink-NavLink"] {
-    color: #ffffff !important;
-}
-
-.side-widget {
-    margin: 0.9rem 0.4rem 0 0.4rem;
-    border-radius: 16px;
-    padding: 14px 16px;
-    background: linear-gradient(150deg, var(--blue-1) 0%, var(--blue-2) 65%, var(--blue-3) 130%);
-    color: #fff;
-    box-shadow: 0 8px 22px rgba(79,125,243,0.28);
-}
-.side-widget .sw-label { font-size: 0.68rem; opacity: 0.85; font-weight: 600; }
-.side-widget .sw-value { font-size: 1.3rem; font-weight: 800; margin-top: 2px; }
-.side-widget .sw-sub   { font-size: 0.72rem; margin-top: 3px; font-weight: 700; }
-.side-widget-light {
-    margin: 0.7rem 0.4rem 0 0.4rem;
-    border-radius: 16px;
-    padding: 14px 16px;
-    background: #f7f9fd;
-    border: 1px solid var(--border);
-}
-.side-widget-light .sw-label { font-size: 0.68rem; color: var(--text-sub); font-weight: 700; display:flex; justify-content:space-between; }
-.side-widget-light .sw-value { font-size: 1.15rem; font-weight: 800; color: var(--text-main); margin-top: 2px; }
-.side-widget-light .sw-sub   { font-size: 0.72rem; margin-top: 3px; font-weight: 700; }
-
-/* =========================== トップバー =========================== */
-/* 原来是 padding: 0.1rem 0 1.1rem 0; 改成下面这样增加顶部距离 */
-/* =========================== トップバー =========================== */
-.topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.2rem 0 1.1rem 0; /* 整体稍微下来一点 */
-    flex-wrap: wrap;
-}
-.topbar-time {
-    color: var(--text-sub);
-    font-size: 0.72rem;
-    font-weight: 600;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    padding: 6px 16px;
-    border-radius: 30px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    white-space: nowrap;
-    /* 保持居中 */
-    margin-top: 10px; 
-}
-.topbar-time .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--up);
-    display: inline-block;
-    box-shadow: 0 0 0 3px rgba(22,199,132,0.15);
-}
-/* 专门针对右上角搜索框的内部微调 */
-.topbar-search input {
-    border-radius: 30px !important;
-    background: #ffffff !important;
-    border: 1px solid var(--border) !important;
-    height: 38px !important;   /* 强制让输入框变矮一点，美观 */
-    margin-top: 14px !important; /* 这里最关键：强行把输入框往下推 14 像素 */
-}
-/* =========================== グラデーションヒーロー =========================== */
-.gradient-header {
-    background: linear-gradient(150deg, #1a2a6c 0%, #4f7df3 55%, #6c9cf5 100%);
-    border-radius: 20px;
-    padding: 20px 28px;
-    color: #fff;
-    margin-bottom: 1.2rem;
-    box-shadow: 0 10px 34px rgba(79,125,243,0.25);
-    position: relative;
-    overflow: hidden;
-}
-.gradient-header::after {
-    content: '';
-    position: absolute;
-    top: -50%; right: -20%;
-    width: 60%; height: 200%;
-    background: radial-gradient(ellipse, rgba(255,255,255,0.08) 0%, transparent 70%);
-    pointer-events: none;
-}
-.gradient-header h2 {
-    margin: 0; font-size: 1.45rem; font-weight: 800;
-    letter-spacing: -0.3px; position: relative; z-index: 1;
-}
-.gradient-header p {
-    margin: 5px 0 0; opacity: 0.88; font-size: 0.84rem;
-    position: relative; z-index: 1;
-}
-
-/* =========================== カード（統計・指標） =========================== */
-.original-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px 18px;
-    height: 100%;
-    box-shadow: 0 2px 12px rgba(20,30,60,.04);
-}
-.original-card .label {
-    font-size: .74rem;
-    color: var(--text-sub);
-    font-weight: 700;
-}
-.original-card .value {
-    font-size: 1.4rem;
-    font-weight: 800;
-    margin-top: 5px;
-    line-height: 1.15;
-    color: var(--text-main);
-}
-.original-card .sub {
-    font-size: .8rem;
-    margin-top: 3px;
-    font-weight: 700;
-}
-.up { color: var(--up); }
-.down { color: var(--down); }
-.muted { color: var(--text-sub); }
-
-/* 見出しカード（ランキング・保有一覧などの白カードコンテナ） */
-.panel-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 18px 20px;
-    box-shadow: 0 2px 14px rgba(20,30,60,.04);
-    margin-bottom: 1.1rem;
-}
-.panel-title {
-    font-size: 0.98rem;
-    font-weight: 800;
-    color: var(--text-main);
-    margin-bottom: 4px;
-}
-
-/* 検索結果カード */
-.result-item {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 12px 16px;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 10px;
-    transition: all 0.18s ease;
-}
-.result-item:hover {
-    border-color: #cfdcf7;
-    box-shadow: 0 6px 18px rgba(79,125,243,0.08);
-}
-.result-item .ri-name {
-    font-weight: 700;
-    font-size: 0.95rem;
-    color: var(--text-main);
-}
-.result-item .ri-code {
-    font-size: 0.75rem;
-    color: var(--text-sub);
-    font-weight: 600;
-}
-.result-item .ri-price {
-    font-weight: 800;
-    font-size: 1.05rem;
-    color: var(--text-main);
-}
-.result-item .ri-actions {
-    display: flex;
-    gap: 6px;
-}
-
-/* クイックタグ */
-.quick-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 8px 0 4px 0;
-}
-.quick-tags .stButton button {
-    border-radius: 30px !important;
-    padding: 4px 16px !important;
-    font-size: 0.75rem !important;
-    background: #f0f4ff !important;
-    border: 1px solid #e1e9fb !important;
-    color: var(--blue-2) !important;
-    font-weight: 700 !important;
-}
-.quick-tags .stButton button:hover {
-    background: #e1eaff !important;
-    border-color: #c6d7fa !important;
-}
-
-/* タブ */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    background: #f0f3f9;
-    border-radius: 14px;
-    padding: 5px;
-    border: 1px solid var(--border);
-}
-.stTabs [data-baseweb="tab"] {
-    border-radius: 10px;
-    padding: 6px 18px;
-    font-weight: 600;
-    font-size: 0.82rem;
-    color: #6b7a8e;
-    transition: all 0.15s ease;
-    background: transparent !important;
-}
-.stTabs [data-baseweb="tab"]:hover {
-    background: #e6ecfb !important;
-    color: #1f2937;
-}
-.stTabs [aria-selected="true"] {
-    background: #ffffff !important;
-    color: var(--blue-2) !important;
-    box-shadow: 0 2px 12px rgba(79,125,243,0.12);
-    font-weight: 800;
-}
-
-/* ボタン */
-.stButton > button {
-    border-radius: 30px !important;
-    font-weight: 700 !important;
-    transition: all 0.15s ease !important;
-    padding: 0.4rem 1.2rem !important;
-    font-size: 0.82rem !important;
-}
-.stButton > button:active { transform: scale(0.96); }
-.stButton > button[kind="primary"] {
-    background: linear-gradient(145deg, var(--blue-2), #2d5bd9) !important;
-    border: none !important;
-    box-shadow: 0 6px 16px rgba(79,125,243,0.3) !important;
-}
-
-/* データフレーム */
-div[data-testid="stDataFrame"] {
-    border-radius: 16px !important;
-    overflow: hidden !important;
-    border: 1px solid var(--border) !important;
-}
-div[data-testid="stDataFrame"] thead tr th {
-    background: #f7f9fd !important;
-    font-weight: 700 !important;
-    font-size: 0.7rem !important;
-    color: #4a5a6e !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.4px !important;
-    padding: 8px 12px !important;
-}
-
-/* ランキングリスト（値上がり/値下がり風） */
-.rank-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 4px;
-    border-bottom: 1px solid #f2f4f8;
-    gap: 10px;
-}
-.rank-row:last-child { border-bottom: none; }
-.rank-badge {
-    width: 20px; height: 20px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.68rem; font-weight: 800; color: #fff;
-    flex-shrink: 0;
-}
-
-/* メニューポップオーバー（互換のため保持） */
-div[data-testid="stPopover"] {
-    border-radius: 16px !important;
-    border: 1px solid var(--border) !important;
-    box-shadow: 0 16px 48px rgba(0,0,0,0.10) !important;
-    padding: 0.3rem 0 !important;
-    background: rgba(255,255,255,0.97) !important;
-    backdrop-filter: blur(12px) !important;
-}
-div[data-testid="stPopover"] a {
-    display: flex !important;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 16px !important;
-    border-radius: 10px !important;
-    transition: all 0.12s !important;
-    text-decoration: none !important;
-    color: #1f2937 !important;
-    font-weight: 600 !important;
-    font-size: 0.85rem !important;
-    margin: 2px 6px !important;
-}
-div[data-testid="stPopover"] a:hover {
-    background: #f0f4ff !important;
-    color: var(--blue-2) !important;
-}
-
-/* =========================== ダッシュボード：ヒーローカード =========================== */
-.hero-card {
-    background: linear-gradient(150deg, #1a2a6c 0%, #3f6bea 55%, #6c9cf5 100%);
-    border-radius: 18px;
-    padding: 18px 22px;
-    color: #fff;
-    height: 100%;
-    box-shadow: 0 10px 30px rgba(63,107,234,0.28);
-    position: relative;
-    overflow: hidden;
-    min-height: 168px;
-}
-.hero-card::after {
-    content: '';
-    position: absolute;
-    right: -30px; bottom: -60px;
-    width: 220px; height: 220px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, transparent 70%);
-}
-.hero-top {
-    display: flex; align-items: center; justify-content: space-between;
-    font-size: 0.8rem; font-weight: 700; opacity: 0.92; position: relative; z-index: 1;
-}
-.hero-value {
-    font-size: 2rem; font-weight: 800; margin-top: 10px;
-    position: relative; z-index: 1; letter-spacing: -0.5px;
-}
-.hero-sub {
-    font-size: 0.82rem; font-weight: 700; margin-top: 6px;
-    position: relative; z-index: 1; opacity: 0.95;
-}
-
-/* =========================== 統計ミニカード =========================== */
-.stat-mini {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 14px 16px;
-    height: 100%;
-    min-height: 168px;
-    box-shadow: 0 2px 12px rgba(20,30,60,.04);
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-}
-.stat-mini .sm-label { font-size: 0.72rem; color: var(--text-sub); font-weight: 700; }
-.stat-mini .sm-value { font-size: 1.28rem; font-weight: 800; color: var(--text-main); margin-top: 8px; }
-.stat-mini .sm-sub { font-size: 0.76rem; font-weight: 700; margin-top: 4px; }
-.stat-mini .sm-icon {
-    width: 34px; height: 34px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1rem; align-self: flex-end; margin-top: 8px;
-}
-.icon-teal   { background: #e3fbf1; }
-.icon-green  { background: #e5faf0; }
-.icon-gold   { background: #fff6df; }
-.icon-blue   { background: #eaf1ff; }
-
-/* =========================== パネルカード（コンテナ枠を統一） =========================== */
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    background: var(--card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 18px !important;
-    box-shadow: 0 2px 14px rgba(20,30,60,.04) !important;
-    padding: 4px 2px !important;
-}
-.panel-head {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 6px;
-}
-.panel-head .ph-title { font-size: 0.95rem; font-weight: 800; color: var(--text-main); }
-.panel-head .ph-more { font-size: 0.74rem; color: var(--blue-2); font-weight: 700; }
-
-/* =========================== ランキング行 =========================== */
-.rank-list { margin-top: 2px; }
-.rank-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 9px 2px;
-    border-bottom: 1px solid #f2f4f8;
-    gap: 10px;
-}
-.rank-row:last-child { border-bottom: none; }
-.rank-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.rank-badge {
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.68rem; font-weight: 800; color: #fff;
-    flex-shrink: 0;
-}
-.rank-name { font-size: 0.85rem; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rank-code { font-size: 0.68rem; color: var(--text-sub); font-weight: 600; }
-.rank-right { text-align: right; flex-shrink: 0; }
-.rank-price { font-size: 0.82rem; font-weight: 700; color: var(--text-main); }
-.rank-pct { font-size: 0.76rem; font-weight: 800; }
-
-/* =========================== ニュースカード =========================== */
-.news-item {
-    display: flex; gap: 10px; align-items: flex-start;
-    padding: 9px 2px; border-bottom: 1px solid #f2f4f8;
-}
-.news-item:last-child { border-bottom: none; }
-.news-thumb {
-    width: 52px; height: 40px; border-radius: 8px; flex-shrink: 0;
-    background: linear-gradient(145deg, #dbe6fb, #eef2fb);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.1rem; overflow: hidden;
-}
-.news-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.news-title {
-    font-size: 0.8rem; font-weight: 700; color: var(--text-main);
-    line-height: 1.35; margin: 0;
-}
-.news-meta { font-size: 0.68rem; color: var(--text-sub); margin-top: 3px; font-weight: 600; }
-
-/* レスポンシブ */
-@media (max-width: 640px) {
-    .result-item { flex-direction: column; align-items: stretch; }
-    .result-item .ri-actions { justify-content: flex-end; }
-    .gradient-header { padding: 14px 18px; }
-    .gradient-header h2 { font-size: 1.15rem; }
-    .stTabs [data-baseweb="tab-list"] { flex-wrap: wrap; }
-}
+.card .label { font-size: .75rem; color: #8a94a6; font-weight: 600; }
+.card .value { font-size: 1.35rem; font-weight: 700; margin-top: 4px; line-height: 1.15; }
+.card .sub { font-size: .8rem; margin-top: 2px; font-weight: 600; }
+.up { color: #16c784; } .down { color: #ea3943; } .muted { color: #8a94a6; }
+.stButton > button { border-radius: 10px; font-weight: 600; }
+div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """
 
@@ -633,6 +117,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
 # 共通ユーティリティ
 # ---------------------------------------------------------------------------
 def normalize_jp(code: str) -> str:
+    """'7203' -> '7203.T'（既に .T / 米国株 / 指数はそのまま）"""
     code = (code or "").strip()
     if not code:
         return ""
@@ -658,11 +143,11 @@ def yen(x: float) -> str:
 
 def card_html(label: str, value: str, sub: str = "", sub_cls: str = "muted") -> str:
     sub_html = f'<div class="sub {sub_cls}">{sub}</div>' if sub else ""
-    return f'<div class="original-card"><div class="label">{label}</div><div class="value">{value}</div>{sub_html}</div>'
+    return f'<div class="card"><div class="label">{label}</div><div class="value">{value}</div>{sub_html}</div>'
 
 
 # ---------------------------------------------------------------------------
-# データ取得
+# データ取得（yfinance / キャッシュ付き）
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=60, show_spinner=False)
 def get_price(ticker: str) -> float | None:
@@ -711,6 +196,7 @@ def get_news(ticker: str) -> list[dict]:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_earnings(ticker: str) -> tuple[list[str], pd.DataFrame]:
+    """(次回決算予定日リスト, 過去決算の売上高/純利益テーブル)"""
     dates: list[str] = []
     table = pd.DataFrame()
     if yf is None or not ticker:
@@ -748,6 +234,7 @@ def get_earnings(ticker: str) -> tuple[list[str], pd.DataFrame]:
 
 
 def _extract_ticker_frame(raw: pd.DataFrame, ticker: str) -> pd.DataFrame | None:
+    """yfinance一括DLの単層・多層カラム両対応で1銘柄を取り出す。"""
     if raw is None or raw.empty:
         return None
     if not isinstance(raw.columns, pd.MultiIndex):
@@ -767,6 +254,7 @@ def _extract_ticker_frame(raw: pd.DataFrame, ticker: str) -> pd.DataFrame | None
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_batch_quotes(tickers: tuple[str, ...], period: str = "1mo") -> pd.DataFrame:
+    """複数銘柄の 現在値/前日比率/出来高/直近推移 を一括取得。"""
     if yf is None or not tickers:
         return pd.DataFrame()
     try:
@@ -804,6 +292,7 @@ def get_batch_quotes(tickers: tuple[str, ...], period: str = "1mo") -> pd.DataFr
 
 
 def search_stock(kw: str) -> list[dict]:
+    """銘柄名・コードから検索。"""
     if not kw or yf is None:
         return []
     k = kw.strip()
@@ -857,6 +346,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def technical_judgment(df: pd.DataFrame) -> dict:
+    """テクニカル分析.py の総合判定ロジック"""
     rsi = float(df["RSI"].iloc[-1])
     macd_buy = df["MACD"].iloc[-1] > df["Signal"].iloc[-1]
     ma_buy = df["SMA5"].iloc[-1] > df["SMA25"].iloc[-1]
@@ -883,75 +373,20 @@ def technical_judgment(df: pd.DataFrame) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# お気に入り
+# お気に入り（SQLite永続化）
 # ---------------------------------------------------------------------------
-def _secret_db_url() -> str:
-    """Streamlit Secrets の DATABASE_URL（外部DB）。
-    設定されていれば PostgreSQL 等の外部DBを使い、サーバー再起動後もデータが残る。
-    未設定ならローカルSQLite（再起動で消える環境あり）を使う。"""
-    try:
-        return str(st.secrets.get("DATABASE_URL", "") or "")
-    except Exception:
-        return ""
-
-
-DB_URL = _secret_db_url()
-
-_CREATE_USERS = (
-    "CREATE TABLE IF NOT EXISTS users ("
-    "username TEXT PRIMARY KEY, password TEXT, created_at TEXT, portfolio TEXT DEFAULT '')"
-)
-_CREATE_FAVS = (
-    "CREATE TABLE IF NOT EXISTS user_favorites ("
-    "username TEXT, code TEXT, name TEXT, note TEXT DEFAULT '', created_at TEXT, "
-    "PRIMARY KEY (username, code))"
-)
-
-
-@st.cache_resource(show_spinner=False)
-def _engine():
-    """外部DB（PostgreSQL等）のエンジンを作成し、テーブルを初期化する。"""
-    from sqlalchemy import create_engine, text
-    eng = create_engine(DB_URL, pool_pre_ping=True)
-    with eng.begin() as c:
-        c.execute(text(_CREATE_USERS))
-        c.execute(text(_CREATE_FAVS))
-    return eng
-
-
 def _db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(_CREATE_USERS)
-    conn.execute(_CREATE_FAVS)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS favorites ("
+        "code TEXT PRIMARY KEY, name TEXT, note TEXT DEFAULT '', created_at TEXT)"
+    )
     return conn
 
 
-def _db_exec(sql: str, params: dict | None = None) -> int:
-    """INSERT/UPDATE/DELETE を実行し、影響行数を返す（:name 形式のパラメータ）。"""
-    if DB_URL:
-        from sqlalchemy import text
-        with _engine().begin() as c:
-            return c.execute(text(sql), params or {}).rowcount
-    with _db() as conn:
-        return conn.execute(sql, params or {}).rowcount
-
-
-def _db_fetchall(sql: str, params: dict | None = None) -> list[tuple]:
-    if DB_URL:
-        from sqlalchemy import text
-        with _engine().connect() as c:
-            return [tuple(r) for r in c.execute(text(sql), params or {}).fetchall()]
-    with _db() as conn:
-        return conn.execute(sql, params or {}).fetchall()
-
-
-def _db_fetchone(sql: str, params: dict | None = None) -> tuple | None:
-    rows = _db_fetchall(sql, params)
-    return rows[0] if rows else None
-
-
 def _mem() -> dict:
+    """SQLiteが使えない環境（一部のネットワークドライブ等）用のフォールバック"""
     return st.session_state.setdefault("fav_mem", {})
 
 
@@ -959,86 +394,13 @@ def _use_mem() -> None:
     st.session_state["fav_persist_err"] = True
 
 
-def current_user() -> str:
-    return st.session_state.get("user", "")
-
-
-# --- ユーザー管理（学習用のため平文保存。セキュリティは考慮しない） ---
-def user_create(username: str, password: str) -> bool:
-    """作成できたら True、既に存在すれば False。"""
-    now = now_jst().strftime("%Y/%m/%d %H:%M")
-    try:
-        n = _db_exec(
-            "INSERT INTO users (username, password, created_at) VALUES (:u, :p, :c) "
-            "ON CONFLICT (username) DO NOTHING",
-            {"u": username, "p": password, "c": now},
-        )
-        return n > 0
-    except Exception:
-        _use_mem()
-        users = st.session_state.setdefault("users_mem", {})
-        if username in users:
-            return False
-        users[username] = password
-        return True
-
-
-def user_verify(username: str, password: str) -> bool:
-    try:
-        row = _db_fetchone("SELECT password FROM users WHERE username=:u", {"u": username})
-        return row is not None and row[0] == password
-    except Exception:
-        _use_mem()
-        return st.session_state.get("users_mem", {}).get(username) == password
-
-
-# --- ポートフォリオ（デモトレード）のアカウント別保存 ---
-def portfolio_save() -> None:
-    user = current_user()
-    if not user:
-        return
-    ss = st.session_state
-    data = {
-        "cash": ss.get("cash", float(INITIAL_CASH)),
-        "positions": {t: [p.shares, p.cost_basis] for t, p in ss.get("positions", {}).items()},
-        "trades": ss.get("trades", []),
-    }
-    try:
-        _db_exec("UPDATE users SET portfolio=:p WHERE username=:u",
-                 {"p": json.dumps(data, ensure_ascii=False), "u": user})
-    except Exception:
-        _use_mem()  # フォールバック環境ではセッション内のみ保持
-
-
-def portfolio_load(user: str) -> None:
-    """ログイン時に、そのユーザーのポートフォリオをセッションに読み込む。"""
-    ss = st.session_state
-    ss["cash"] = float(INITIAL_CASH)
-    ss["positions"] = {}
-    ss["trades"] = []
-    try:
-        row = _db_fetchone("SELECT portfolio FROM users WHERE username=:u", {"u": user})
-        if row and row[0]:
-            d = json.loads(row[0])
-            ss["cash"] = float(d.get("cash", INITIAL_CASH))
-            ss["positions"] = {t: Position(int(v[0]), float(v[1]))
-                               for t, v in d.get("positions", {}).items()}
-            ss["trades"] = list(d.get("trades", []))
-    except Exception:
-        pass
-
-
-# --- お気に入り（アカウント別） ---
 def fav_all() -> pd.DataFrame:
     cols = ["code", "name", "note", "created_at"]
     try:
-        rows = _db_fetchall(
-            "SELECT code, name, note, created_at FROM user_favorites "
-            "WHERE username=:u ORDER BY created_at DESC",
-            {"u": current_user()},
-        )
-        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
-    except Exception:
+        with _db() as conn:
+            df = pd.read_sql_query("SELECT * FROM favorites ORDER BY created_at DESC", conn)
+        return df if not df.empty else pd.DataFrame(columns=cols)
+    except sqlite3.Error:
         _use_mem()
         rows = [{"code": k, **v} for k, v in _mem().items()]
         return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
@@ -1046,41 +408,40 @@ def fav_all() -> pd.DataFrame:
 
 def fav_codes() -> set[str]:
     try:
-        rows = _db_fetchall("SELECT code FROM user_favorites WHERE username=:u",
-                            {"u": current_user()})
-        return {r[0] for r in rows}
-    except Exception:
+        with _db() as conn:
+            return {r[0] for r in conn.execute("SELECT code FROM favorites")}
+    except sqlite3.Error:
         _use_mem()
         return set(_mem())
 
 
 def fav_add(code: str, name: str) -> None:
-    now = now_jst().strftime("%Y/%m/%d %H:%M")
+    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
     try:
-        _db_exec(
-            "INSERT INTO user_favorites (username, code, name, note, created_at) "
-            "VALUES (:u, :c, :n, '', :t) ON CONFLICT (username, code) DO NOTHING",
-            {"u": current_user(), "c": code, "n": name, "t": now},
-        )
-    except Exception:
+        with _db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO favorites (code, name, note, created_at) VALUES (?,?,?,?)",
+                (code, name, "", now),
+            )
+    except sqlite3.Error:
         _use_mem()
         _mem().setdefault(code, {"name": name, "note": "", "created_at": now})
 
 
 def fav_remove(code: str) -> None:
     try:
-        _db_exec("DELETE FROM user_favorites WHERE username=:u AND code=:c",
-                 {"u": current_user(), "c": code})
-    except Exception:
+        with _db() as conn:
+            conn.execute("DELETE FROM favorites WHERE code=?", (code,))
+    except sqlite3.Error:
         _use_mem()
         _mem().pop(code, None)
 
 
 def fav_note(code: str, note: str) -> None:
     try:
-        _db_exec("UPDATE user_favorites SET note=:n WHERE username=:u AND code=:c",
-                 {"n": note, "u": current_user(), "c": code})
-    except Exception:
+        with _db() as conn:
+            conn.execute("UPDATE favorites SET note=? WHERE code=?", (note, code))
+    except sqlite3.Error:
         _use_mem()
         if code in _mem():
             _mem()[code]["note"] = note
@@ -1088,12 +449,11 @@ def fav_note(code: str, note: str) -> None:
 
 def fav_clear() -> int:
     try:
-        row = _db_fetchone("SELECT COUNT(*) FROM user_favorites WHERE username=:u",
-                           {"u": current_user()})
-        n = int(row[0]) if row else 0
-        _db_exec("DELETE FROM user_favorites WHERE username=:u", {"u": current_user()})
-        return n
-    except Exception:
+        with _db() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
+            conn.execute("DELETE FROM favorites")
+            return n
+    except sqlite3.Error:
         _use_mem()
         n = len(_mem())
         _mem().clear()
@@ -1101,6 +461,7 @@ def fav_clear() -> int:
 
 
 def fav_toggle_button(code: str, name: str, key: str) -> None:
+    """お気に入り追加/解除トグルボタン"""
     if code in fav_codes():
         if st.button("⭐ お気に入り解除", key=key, use_container_width=True):
             fav_remove(code)
@@ -1114,7 +475,7 @@ def fav_toggle_button(code: str, name: str, key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# デモトレード
+# デモトレード（セッション状態）
 # ---------------------------------------------------------------------------
 @dataclass
 class Position:
@@ -1154,14 +515,13 @@ def execute_trade(ticker: str, side: str, shares: int, price: float) -> tuple[bo
             pos.cost_basis = 0.0
     ss.positions[ticker] = pos
     ss.trades.append({
-        "日時": now_jst().strftime("%m-%d %H:%M:%S"),
+        "日時": dt.datetime.now().strftime("%m-%d %H:%M:%S"),
         "銘柄": label_of(ticker),
         "売買": side,
         "株数": shares,
         "価格": round(price, 1),
         "約定額": round(cost, 0),
     })
-    portfolio_save()
     return True, f"{side} 約定: {label_of(ticker)} {shares}株 @ ¥{price:,.1f}"
 
 
@@ -1174,78 +534,42 @@ def open_detail(code: str) -> None:
 
 
 # ===========================================================================
-# ページ: ホーム
+# ページ: ホーム（銘柄検索 + ランキング）
 # ===========================================================================
-def _rank_panel(title: str, df_sorted: pd.DataFrame, key: str) -> None:
-    """値上がり率/値下がり率ランキングをスクリーンショット風のカードで表示する。"""
-    with st.container(border=True):
-        st.markdown(
-            f'<div class="panel-head"><span class="ph-title">{title}</span>'
-            f'<span class="ph-more">クリックで詳細へ ›</span></div>',
-            unsafe_allow_html=True,
-        )
-        df_show = df_sorted.head(5).reset_index(drop=True)
-        event = st.dataframe(
-            df_show[["銘柄名", "yahoo_code", "現在値", "前日比率"]],
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key=key,
-            column_config={
-                "銘柄名": st.column_config.TextColumn("銘柄名"),
-                "yahoo_code": st.column_config.TextColumn("コード", width="small"),
-                "現在値": st.column_config.NumberColumn("現在値", format="%.1f"),
-                "前日比率": st.column_config.NumberColumn("前日比（%）", format="%+.2f"),
-            },
-            height=232,
-        )
-        try:
-            rows = list(event.selection.rows)
-        except Exception:
-            rows = []
-        if rows:
-            open_detail(str(df_show.iloc[rows[0]]["yahoo_code"]))
-
-
 def page_home() -> None:
+    st.markdown(
+        '<div class="app-header"><h1>🏠 銘柄検索</h1>'
+        '<p>銘柄名や証券コードで検索して、銘柄詳細（チャート・ニュース・予測）へ</p></div>',
+        unsafe_allow_html=True,
+    )
+
     ss = st.session_state
     ss.setdefault("hist", [])
     ss.setdefault("_res", [])
-    init_trade_state()
 
-    # ---------------------------------------------------------------
-    # 検索バー（画面上部・スクリーンショットのトップ検索窓に相当）
-    # ---------------------------------------------------------------
-    col1, col2 = st.columns([5, 1])
-    kw = col1.text_input(
-        "検索キーワード",
-        placeholder="銘柄名・コードを検索（例：トヨタ、7203.T）",
-        label_visibility="collapsed",
-        key="skw",
-    )
-    go = col2.button("🔍 検索", key="search_btn", use_container_width=True)
+    c1, c2 = st.columns([3, 1])
+    kw = c1.text_input("検索キーワード", placeholder="例: トヨタ, 7203, AAPL, 日経平均",
+                       label_visibility="collapsed", key="skw")
+    go = c2.button("🔍 検索", type="primary", use_container_width=True)
 
-    with st.expander("⚡ クイック銘柄 ／ 検索履歴", expanded=False):
-        st.markdown('<div class="quick-tags">', unsafe_allow_html=True)
-        qcols = st.columns(len(QUICK_TICKERS))
-        for i, tk in enumerate(QUICK_TICKERS):
-            label = CODE2NAME.get(tk, tk)
-            if qcols[i].button(label, key=f"q_{tk}", use_container_width=True):
-                open_detail(tk)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        if ss["hist"]:
-            st.caption(f"📜 検索履歴（{len(ss['hist'])}件）")
-            hcols = st.columns(4)
+    # 検索履歴チップ
+    if ss["hist"]:
+        with st.expander(f"📜 検索履歴（{len(ss['hist'])}件）"):
+            cols = st.columns(4)
             for i, h in enumerate(ss["hist"][-12:]):
-                if hcols[i % 4].button(h, key=f"h_{i}_{h}", use_container_width=True):
+                if cols[i % 4].button(h, key=f"h_{i}_{h}", use_container_width=True):
                     ss["_sr"] = h
                     st.rerun()
-
     sr = ss.pop("_sr", "")
     if sr:
         kw, go = sr, True
+
+    # クイック銘柄
+    st.caption("クイック銘柄（クリックで詳細へ）")
+    qcols = st.columns(len(QUICK_TICKERS))
+    for i, tk in enumerate(QUICK_TICKERS):
+        if qcols[i].button(CODE2NAME.get(tk, tk), key=f"q_{tk}", use_container_width=True):
+            open_detail(tk)
 
     if go and kw:
         kw = kw.strip()
@@ -1260,153 +584,45 @@ def page_home() -> None:
             st.warning("❌ 該当する銘柄が見つかりませんでした")
             ss["_res"] = []
 
-    if ss["_res"]:
-        st.markdown("### 📋 検索結果")
-        for idx, r in enumerate(ss["_res"]):
-            code = r["code"]
-            cu = cur_of(code)
-            price_str = f"{cu}{r['price']:,.2f}" if r.get("price") else "N/A"
-
-            col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1.2, 1.5, 0.9, 0.9])
-            with col_a:
-                st.markdown(f'<span class="ri-name">{r["name"]}</span>', unsafe_allow_html=True)
-                if r.get("sector"):
-                    st.caption(f"🏷️ {r['sector']}")
-            col_b.markdown(f'<span class="ri-code">{code}</span>', unsafe_allow_html=True)
-            col_c.markdown(f'<span class="ri-price">{price_str}</span>', unsafe_allow_html=True)
-            with col_d:
+    for idx, r in enumerate(ss["_res"]):
+        code = r["code"]
+        cu = cur_of(code)
+        ps = f"{cu}{r['price']:,.2f}" if r.get("price") else "N/A"
+        with st.container(border=True):
+            a, b, c, d, e = st.columns([2.2, 1.3, 1.3, 1, 1])
+            a.markdown(f"**{r['name']}**")
+            if r.get("sector"):
+                a.caption(f"🏷️ {r['sector']}")
+            b.metric("コード", code)
+            c.metric("現在値", ps)
+            with d:
                 if st.button("📊 詳細", key=f"dt_{code}_{idx}", use_container_width=True):
                     open_detail(code)
-            with col_e:
+            with e:
                 fav_toggle_button(code, r["name"], key=f"fv_{code}_{idx}")
-        st.divider()
 
-    # ---------------------------------------------------------------
-    # 資産サマリー（ヒーローカード）＋ 統計ミニカード４枚
-    # ---------------------------------------------------------------
-    holdings_value = 0.0
-    n_positions = 0
-    annual_div = 0.0
-    for tk, pos in ss.positions.items():
-        if pos.shares:
-            n_positions += 1
-            p = get_price(tk)
-            if p:
-                holdings_value += pos.shares * p
-                dy = get_info(tk).get("dividendYield")
-                if isinstance(dy, (int, float)):
-                    annual_div += pos.shares * p * (dy / 100 if dy > 1 else dy)
-    total = ss.cash + holdings_value
-    pnl = total - INITIAL_CASH
-    pct = pnl / INITIAL_CASH * 100 if INITIAL_CASH else 0.0
-    cls = "up" if pnl > 0 else ("down" if pnl < 0 else "muted")
-    arrow = "▲" if pnl > 0 else ("▼" if pnl < 0 else "—")
-
-    hc, s1, s2, s3 = st.columns([2.1, 1, 1, 1])
-    with hc:
-        st.markdown(
-            '<div class="hero-card">'
-            '<div class="hero-top"><span>💼 資産サマリー（デモ口座）</span></div>'
-            f'<div class="hero-value">{yen(total)}</div>'
-            f'<div class="hero-sub">前日比 {arrow} {yen(abs(pnl))}（{pct:+.2f}%）</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-    with s1:
-        st.markdown(
-            '<div class="stat-mini"><div class="sm-label">保有銘柄数</div>'
-            f'<div class="sm-value">{n_positions} 銘柄</div>'
-            '<div class="sm-icon icon-teal">📦</div></div>',
-            unsafe_allow_html=True,
-        )
-    with s2:
-        st.markdown(
-            '<div class="stat-mini"><div class="sm-label">評価損益</div>'
-            f'<div class="sm-value {cls}">{arrow} {yen(abs(pnl))}</div>'
-            f'<div class="sm-sub {cls}">{pct:+.2f}%</div>'
-            '<div class="sm-icon icon-green">💹</div></div>',
-            unsafe_allow_html=True,
-        )
-    with s3:
-        st.markdown(
-            '<div class="stat-mini"><div class="sm-label">買付余力（現金）</div>'
-            f'<div class="sm-value">{yen(ss.cash)}</div>'
-            '<div class="sm-icon icon-blue">👛</div></div>',
-            unsafe_allow_html=True,
-        )
-    st.write("")
-    if annual_div > 0:
-        st.caption(f"🎁 保有銘柄の年間配当金（予想・実データより概算）: {yen(annual_div)}")
-        st.write("")
-
-    # ---------------------------------------------------------------
-    # 日経平均チャート ＋ 値上がり／値下がりランキング
-    # ---------------------------------------------------------------
-    left, right1, right2 = st.columns([1.7, 1, 1])
-
-    with left:
-        with st.container(border=True):
-            st.markdown('<div class="panel-head"><span class="ph-title">📈 日経平均チャート</span></div>',
-                        unsafe_allow_html=True)
-            period_map = {
-                "1日": ("1d", "5m"), "1週間": ("5d", "30m"), "1ヶ月": ("1mo", "1d"),
-                "3ヶ月": ("3mo", "1d"), "1年": ("1y", "1wk"),
-            }
-            p_label = st.radio("期間", list(period_map.keys()), index=0, horizontal=True,
-                                key="n225_period", label_visibility="collapsed")
-            period, interval = period_map[p_label]
-            n_df = get_history("^N225", period, interval)
-            if n_df.empty and period != "5d":
-                n_df = get_history("^N225", "5d", "1d")
-            if n_df.empty:
-                st.info("日経平均のデータを取得できませんでした。")
-            else:
-                last = float(n_df["Close"].iloc[-1])
-                base = float(n_df["Close"].iloc[0])
-                d = last - base
-                p_pct = d / base * 100 if base else 0.0
-                cls_n = "up" if d >= 0 else "down"
-                arrow_n = "▲" if d >= 0 else "▼"
-                st.markdown(
-                    f'<div style="font-size:1.7rem;font-weight:800;color:var(--text-main);margin:2px 0 0 2px;">{last:,.2f}'
-                    f'<span class="{cls_n}" style="font-size:0.95rem;font-weight:800;margin-left:10px;">'
-                    f'{arrow_n} {d:+,.2f}（{p_pct:+.2f}%）</span></div>',
-                    unsafe_allow_html=True,
-                )
-                try:
-                    import plotly.graph_objects as go
-                    fig = go.Figure(go.Scatter(
-                        x=n_df.index, y=n_df["Close"], mode="lines", line=dict(color=UP, width=2),
-                        fill="tozeroy", fillcolor="rgba(22,199,132,0.08)",
-                    ))
-                    fig.update_yaxes(range=[float(n_df["Close"].min()) * 0.998, float(n_df["Close"].max()) * 1.002])
-                    fig.update_layout(
-                        height=260, margin=dict(l=0, r=0, t=8, b=0),
-                        template="plotly_white", showlegend=False, hovermode="x unified",
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                except ImportError:
-                    st.line_chart(n_df["Close"], height=260)
-                st.caption(
-                    f"始値 {n_df['Open'].iloc[0]:,.2f}　高値 {n_df['High'].max():,.2f}　"
-                    f"安値 {n_df['Low'].min():,.2f}　直近終値 {last:,.2f}"
-                )
-
+    # --- ランキング ---
+    st.divider()
+    st.markdown("### 📊 銘柄ランキング（主要銘柄）")
     with st.spinner("ランキングデータを取得しています…"):
         rank = get_batch_quotes(RANK_UNIVERSE, period="5d")
+    if rank.empty:
+        st.info("ランキングデータを取得できませんでした。")
+        return
 
-    if not rank.empty:
-        with right1:
-            _rank_panel("📈 値上がり率ランキング", rank.sort_values("前日比率", ascending=False), "rank_up")
-        with right2:
-            _rank_panel("📉 値下がり率ランキング", rank.sort_values("前日比率", ascending=True), "rank_down")
-
-        with st.expander("🔥 出来高ランキングも見る", expanded=False):
-            df_show = rank.sort_values("出来高", ascending=False).head(15).reset_index(drop=True)
+    tab_up, tab_down, tab_vol = st.tabs(["📈 値上がり率", "📉 値下がり率", "🔥 出来高"])
+    views = [
+        (tab_up, rank.sort_values("前日比率", ascending=False), "rank_up"),
+        (tab_down, rank.sort_values("前日比率", ascending=True), "rank_down"),
+        (tab_vol, rank.sort_values("出来高", ascending=False), "rank_vol"),
+    ]
+    for tab, df_v, key in views:
+        with tab:
+            df_show = df_v.head(15).reset_index(drop=True)
             event = st.dataframe(
                 df_show[["銘柄名", "yahoo_code", "現在値", "前日比率", "出来高", "直近推移"]],
                 use_container_width=True, hide_index=True,
-                on_select="rerun", selection_mode="single-row", key="rank_vol",
+                on_select="rerun", selection_mode="single-row", key=key,
                 column_config={
                     "yahoo_code": st.column_config.TextColumn("コード", width="small"),
                     "現在値": st.column_config.NumberColumn("現在値", format="%.1f"),
@@ -1421,129 +637,20 @@ def page_home() -> None:
                 rows = []
             if rows:
                 open_detail(str(df_show.iloc[rows[0]]["yahoo_code"]))
-    else:
-        with right1:
-            st.info("ランキングデータを取得できませんでした。")
-
-    st.write("")
-
-    # ---------------------------------------------------------------
-    # 保有銘柄一覧（デモ口座）＋ 最新ニュース
-    # ---------------------------------------------------------------
-    hold_col, news_col = st.columns([1.7, 1])
-
-    with hold_col:
-        with st.container(border=True):
-            st.markdown('<div class="panel-head"><span class="ph-title">📦 保有銘柄一覧（デモ口座）</span></div>',
-                        unsafe_allow_html=True)
-            rows = []
-            for tk, pos in ss.positions.items():
-                if not pos.shares:
-                    continue
-                p = get_price(tk)
-                if p is None:
-                    continue
-                mkt = pos.shares * p
-                cost = pos.shares * pos.cost_basis
-                rows.append({
-                    "銘柄名": CODE2NAME.get(tk, tk), "コード": tk, "保有数": pos.shares,
-                    "平均取得単価": round(pos.cost_basis, 1), "現在値": round(p, 1),
-                    "評価額": round(mkt, 0), "評価損益": round(mkt - cost, 0),
-                    "評価損益率%": round((mkt - cost) / cost * 100, 2) if cost else 0.0,
-                })
-            if rows:
-                hdf = pd.DataFrame(rows)
-                styled = hdf.style.map(
-                    lambda v: f"color:{UP};font-weight:700" if isinstance(v, (int, float)) and v > 0
-                    else (f"color:{DOWN};font-weight:700" if isinstance(v, (int, float)) and v < 0 else ""),
-                    subset=["評価損益", "評価損益率%"],
-                ).format({"平均取得単価": "{:,.1f}", "現在値": "{:,.1f}", "評価額": "{:,.0f}",
-                          "評価損益": "{:+,.0f}", "評価損益率%": "{:+.2f}"})
-                st.dataframe(styled, use_container_width=True, hide_index=True)
-            else:
-                st.info("保有銘柄はまだありません。「💼 デモトレード」から取引できます。")
-            st.page_link(PG_TRADE, label="もっと見る（デモトレードへ） ›")
-
-    with news_col:
-        with st.container(border=True):
-            st.markdown('<div class="panel-head"><span class="ph-title">📰 最新ニュース</span></div>',
-                        unsafe_allow_html=True)
-            news_tickers = [tk for tk in ss.positions if ss.positions[tk].shares] or QUICK_TICKERS[:3]
-            items = []
-            for tk in news_tickers[:3]:
-                items.extend(get_news(tk)[:3])
-            if not items:
-                st.info("📰 ニュースはありません")
-            else:
-                for n in items[:5]:
-                    c = n.get("content", {}) or {}
-                    title = c.get("title", "")
-                    if not title:
-                        continue
-                    link = (c.get("canonicalUrl", {}) or {}).get("url", "") or ""
-                    provider = (c.get("provider", {}) or {}).get("displayName", "")
-                    pub = c.get("pubDate", "")
-                    thumb = ""
-                    try:
-                        thumb = (c.get("thumbnail", {}) or {}).get("resolutions", [{}])[0].get("url", "")
-                    except Exception:
-                        thumb = ""
-                    thumb_html = f'<img src="{thumb}"/>' if thumb else "📰"
-                    title_html = f'<a href="{link}" target="_blank" style="text-decoration:none;color:inherit;">{title}</a>' if link else title
-                    st.markdown(
-                        f'<div class="news-item"><div class="news-thumb">{thumb_html}</div>'
-                        f'<div><p class="news-title">{title_html}</p>'
-                        f'<div class="news-meta">{provider}　・　{pub}</div></div></div>',
-                        unsafe_allow_html=True,
-                    )
 
 
 # ===========================================================================
 # ページ: 銘柄詳細
 # ===========================================================================
-def resolve_symbol(k: str) -> str | None:
-    """入力文字列から実在する銘柄のティッカーを解決する。見つからなければ None。"""
-    k = (k or "").strip()
-    if not k:
-        return None
-    if k in JMAP:
-        return JMAP[k]
-    # 日本語名の部分一致
-    for name, code in JMAP.items():
-        if k in name or name in k:
-            return code
-    # コードとして解釈し、実在確認（企業情報 or 価格が取れるもののみ有効）
-    for cand in dict.fromkeys([normalize_jp(k), k.upper() if not k.isdigit() else ""]):
-        if not cand:
-            continue
-        info = get_info(cand)
-        if info and (info.get("longName") or info.get("shortName")):
-            return cand
-        if get_price(cand) is not None:
-            return cand
-    return None
-
-
 def page_detail() -> None:
     ss = st.session_state
-
-    with st.container():
-        c1, c2 = st.columns([4, 1])
-        code_in = c1.text_input(
-            "証券コード・銘柄名",
-            placeholder="例: 7203, トヨタ, AAPL",
-            label_visibility="collapsed",
-            key="detail_kw"
-        )
-        if c2.button("表示", type="primary", use_container_width=True) and code_in:
-            with st.spinner("銘柄を確認しています…"):
-                resolved = resolve_symbol(code_in)
-            if resolved:
-                ss["sym"] = resolved
-                st.rerun()
-            else:
-                st.error(f"「{code_in.strip()}」に該当する銘柄が見つかりませんでした。"
-                         "銘柄名または証券コード（例: 7203, トヨタ, AAPL）を確認してください。")
+    c1, c2 = st.columns([3, 1])
+    code_in = c1.text_input("証券コード・銘柄名", placeholder="例: 7203, トヨタ, AAPL",
+                            label_visibility="collapsed", key="detail_kw")
+    if c2.button("表示", type="primary", use_container_width=True) and code_in:
+        k = code_in.strip()
+        ss["sym"] = JMAP.get(k, normalize_jp(k))
+        st.rerun()
 
     sym = ss.get("sym")
     if not sym:
@@ -1551,24 +658,17 @@ def page_detail() -> None:
         return
 
     info = get_info(sym)
-    # 実在しない銘柄（情報も価格も取得できない）は表示しない
-    if not (info and (info.get("longName") or info.get("shortName"))) and get_price(sym) is None:
-        st.warning(f"「{sym}」の銘柄情報を取得できませんでした。上の入力欄から検索し直してください。")
-        ss.pop("sym", None)
-        return
     name = CODE2NAME.get(sym) or info.get("longName") or info.get("shortName") or sym
     cu = cur_of(sym)
     price = get_price(sym)
 
-    # 銘柄ヘッダー
+    # ヘッダー行
     h1, h2 = st.columns([3, 1])
-    with h1:
-        st.markdown(f"## 📊 {name}")
-        st.caption(f"コード: {sym}")
+    h1.markdown(f"## 📊 {name}（{sym}）")
     with h2:
         fav_toggle_button(sym, name, key=f"fv_detail_{sym}")
 
-    # 価格と前日比
+    # 前日比
     hist5 = get_history(sym, "5d", "1d")
     chg = pct = None
     if price is not None and len(hist5) >= 2:
@@ -1577,7 +677,6 @@ def page_detail() -> None:
             chg = price - prev
             pct = chg / prev * 100
 
-    # ===== 元のカードスタイルで指標表示（4列×2行） =====
     r1 = st.columns(4)
     if price is not None:
         sub = f"{'▲' if (chg or 0) >= 0 else '▼'} {chg:+,.1f}（{pct:+.2f}%）" if chg is not None else ""
@@ -1585,7 +684,6 @@ def page_detail() -> None:
         r1[0].markdown(card_html("現在値", f"{cu}{price:,.1f}", sub, cls), unsafe_allow_html=True)
     else:
         r1[0].markdown(card_html("現在値", "N/A"), unsafe_allow_html=True)
-    
     r1[1].markdown(card_html("業種", info.get("sector") or "N/A"), unsafe_allow_html=True)
     mc = info.get("marketCap")
     mc_s = f"{mc/1e8:,.0f}億円" if isinstance(mc, (int, float)) and cu == "¥" else (
@@ -1609,8 +707,6 @@ def page_detail() -> None:
                    unsafe_allow_html=True)
 
     st.write("")
-
-    # タブ
     tab_chart, tab_tech, tab_pred, tab_news, tab_earn, tab_trade = st.tabs(
         ["📈 チャート", "🤖 テクニカル判定", "🔮 予測", "📰 ニュース", "📅 決算", "💼 取引（デモ）"]
     )
@@ -1630,28 +726,16 @@ def page_detail() -> None:
 
 
 def render_chart(sym: str) -> None:
-    period = st.radio(
-        "期間",
-        ["1mo", "3mo", "6mo", "1y", "5y"],
-        format_func=lambda p: {"1mo": "1ヶ月", "3mo": "3ヶ月", "6mo": "6ヶ月", "1y": "1年", "5y": "5年"}[p],
-        index=1,
-        horizontal=True,
-        key="chart_period"
-    )
-    
+    period = st.radio("期間", ["1mo", "3mo", "6mo", "1y", "5y"],
+                      format_func=lambda p: {"1mo": "1ヶ月", "3mo": "3ヶ月", "6mo": "6ヶ月",
+                                             "1y": "1年", "5y": "5年"}[p],
+                      index=1, horizontal=True, key="chart_period")
     o1, o2 = st.columns(2)
-    overlays = o1.multiselect(
-        "価格チャートに重ねる",
-        ["移動平均(25/75)", "ボリンジャーバンド"],
-        default=["移動平均(25/75)"],
-        key="ovl"
-    )
-    panels = o2.multiselect(
-        "サブパネル",
-        ["出来高", "RSI(14)", "MACD"],
-        default=["RSI(14)", "MACD"],
-        key="pnl"
-    )
+    overlays = o1.multiselect("価格チャートに重ねる",
+                              ["移動平均(25/75)", "ボリンジャーバンド"],
+                              default=["移動平均(25/75)"], key="ovl")
+    panels = o2.multiselect("サブパネル", ["出来高", "RSI(14)", "MACD"],
+                            default=["RSI(14)", "MACD"], key="pnl")
 
     interval = "1wk" if period == "5y" else "1d"
     df = get_history(sym, period, interval)
@@ -1671,21 +755,13 @@ def render_chart(sym: str) -> None:
     heights = {"price": 0.5, "出来高": 0.16, "RSI(14)": 0.17, "MACD": 0.17}
     row_h = [heights[r] for r in rows]
     s = sum(row_h)
-    fig = make_subplots(
-        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.03,
-        row_heights=[h / s for h in row_h],
-        subplot_titles=[("" if r == "price" else r) for r in rows]
-    )
+    fig = make_subplots(rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                        row_heights=[h / s for h in row_h],
+                        subplot_titles=[("" if r == "price" else r) for r in rows])
 
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index, open=df["Open"], high=df["High"],
-            low=df["Low"], close=df["Close"], name="株価",
-            increasing_line_color=UP, decreasing_line_color=DOWN
-        ),
-        row=1, col=1
-    )
-    
+    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"],
+                                 low=df["Low"], close=df["Close"], name="株価",
+                                 increasing_line_color=UP, decreasing_line_color=DOWN), row=1, col=1)
     if "移動平均(25/75)" in overlays:
         fig.add_trace(go.Scatter(x=df.index, y=df["SMA25"], name="SMA25",
                                  line=dict(color="#f0b90b", width=1.2)), row=1, col=1)
@@ -1718,14 +794,10 @@ def render_chart(sym: str) -> None:
             fig.add_trace(go.Scatter(x=df.index, y=df["Signal"], name="Signal",
                                      line=dict(color="#f0b90b", width=1.3)), row=i, col=1)
 
-    fig.update_layout(
-        height=420 + 120 * (len(rows) - 1),
-        margin=dict(l=0, r=0, t=18, b=0),
-        xaxis_rangeslider_visible=False,
-        template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
-        hovermode="x unified"
-    )
+    fig.update_layout(height=420 + 120 * (len(rows) - 1), margin=dict(l=0, r=0, t=18, b=0),
+                      xaxis_rangeslider_visible=False, template="plotly_white",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+                      hovermode="x unified")
     fig.update_xaxes(rangeslider_visible=False)
     if interval == "1d":
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
@@ -1745,31 +817,23 @@ def render_technical(sym: str, name: str, cu: str) -> None:
     df = add_indicators(df)
     t = technical_judgment(df)
     price = float(df["Close"].iloc[-1])
-    
     st.markdown(f"""
-    <div style="background:#f8faff;border-radius:16px;padding:24px;border:1px solid #eef2f6;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
-            <div>
-                <div style="font-size:0.7rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">{name}</div>
-                <div style="font-size:1.8rem;font-weight:700;color:#1a2634;">{cu}{price:,.0f}</div>
-            </div>
-            <div style="flex:1;min-width:120px;">
-                <div style="font-size:1.8rem;letter-spacing:2px;">{t['stars']}</div>
-                <span style="display:inline-block;padding:4px 18px;border-radius:30px;background-color:{t['color']};color:white;font-weight:bold;font-size:0.9rem;">
-                    {t['emoji']} {t['judgment']}
-                </span>
-            </div>
-            <div style="display:flex;gap:28px;flex-wrap:wrap;">
-                <div><div style="font-size:0.6rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">RSI</div><div style="font-size:1.1rem;font-weight:700;color:#1a2634;">{t['rsi']:.1f}</div></div>
-                <div><div style="font-size:0.6rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">MACD</div><div style="font-size:1.1rem;font-weight:700;color:#1a2634;">{t['macd']:+.2f}</div></div>
-                <div><div style="font-size:0.6rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">MA25</div><div style="font-size:1.1rem;font-weight:700;color:#1a2634;">{cu}{t['sma25']:,.0f}</div></div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+<div style="border:1px solid #e0e0e0;border-radius:16px;padding:28px;background-color:#fafafa;margin-bottom:12px;">
+  <div style="font-size:22px;font-weight:bold;margin-bottom:4px;">{name}</div>
+  <div style="color:#666;font-size:14px;margin-bottom:14px;">現在価格</div>
+  <div style="font-size:30px;font-weight:bold;margin-bottom:14px;">{cu}{price:,.0f}</div>
+  <div style="font-size:26px;letter-spacing:2px;margin-bottom:10px;">{t['stars']}</div>
+  <div style="display:inline-block;padding:6px 18px;border-radius:20px;background-color:{t['color']};
+              color:white;font-weight:bold;font-size:17px;margin-bottom:18px;">{t['emoji']} 総合判定：{t['judgment']}</div>
+  <div style="display:flex;gap:32px;margin-top:18px;">
+    <div><div style="color:#666;font-size:13px;">RSI</div><div style="font-size:18px;font-weight:bold;">{t['rsi']:.1f}</div></div>
+    <div><div style="color:#666;font-size:13px;">MACD</div><div style="font-size:18px;font-weight:bold;">{t['macd']:+.2f}</div></div>
+    <div><div style="color:#666;font-size:13px;">MA25</div><div style="font-size:18px;font-weight:bold;">{cu}{t['sma25']:,.0f}</div></div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
     st.info(t["comment"])
-    
-    with st.expander("判定の内訳", expanded=False):
+    with st.expander("判定の内訳"):
         for label, ok in t["checks"].items():
             st.write(("✅ " if ok else "❌ ") + label)
         st.caption("3つのシグナルのうち一致した数で判定します（3=買い / 2=やや買い / 1=様子見 / 0=売り）。")
@@ -1808,15 +872,10 @@ def render_prediction(sym: str) -> None:
                              line=dict(color="#f0b90b", width=1.4)))
     fig.add_trace(go.Scatter(x=[ma25.index[-1]] + list(future_index),
                              y=[last_ma] + future, mode="lines", name="30営業日予測",
-                             line=dict(dash="dash", color="#ea3943", width=2)))
-    fig.update_layout(
-        title="株価・25日移動平均・30営業日予測",
-        hovermode="x unified",
-        template="plotly_white",
-        legend=dict(orientation="h", y=1.08),
-        height=440,
-        margin=dict(l=0, r=0, t=60, b=0)
-    )
+                             line=dict(dash="dash", color="red")))
+    fig.update_layout(title="株価・25日移動平均・30営業日予測", hovermode="x unified",
+                      template="plotly_white", legend=dict(orientation="h", y=1.08),
+                      height=440, margin=dict(l=0, r=0, t=60, b=0))
     st.plotly_chart(fig, use_container_width=True)
 
     direction = "上昇" if trend > 0 else ("下落" if trend < 0 else "横ばい")
@@ -1844,8 +903,7 @@ def render_news(sym: str) -> None:
 
 def render_earnings(sym: str) -> None:
     dates, table = get_earnings(sym)
-    
-    st.markdown("### 📅 次回決算予定日")
+    st.subheader("次回決算予定日")
     if dates:
         cols = st.columns(max(len(dates), 1))
         for i, d in enumerate(dates):
@@ -1853,7 +911,7 @@ def render_earnings(sym: str) -> None:
     else:
         st.info("📌 決算日情報なし")
 
-    st.markdown("### 📊 過去の決算（四半期）")
+    st.subheader("過去の決算（四半期）")
     if table.empty:
         st.warning("過去の決算情報は取得できませんでした。")
         return
@@ -1861,7 +919,6 @@ def render_earnings(sym: str) -> None:
     for col in show.columns:
         show[col] = show[col].apply(lambda x: f"{x/1e8:,.0f} 億円" if pd.notnull(x) else "-")
     st.dataframe(show, use_container_width=True)
-    
     if "純利益" in table.columns:
         try:
             import plotly.graph_objects as go
@@ -1880,23 +937,14 @@ def render_order_form(sym: str, price: float | None) -> None:
     if price is None:
         st.warning("価格を取得できないため注文できません。")
         return
-    
-    st.caption(f"💰 現金残高: {yen(st.session_state.cash)}")
-    
+    st.caption(f"仮想資金でのペーパートレードです（現金残高 {yen(st.session_state.cash)}）")
     c1, c2 = st.columns(2)
     side = c1.radio("売買", ["買い", "売り"], horizontal=True, key=f"side_{sym}")
     shares = c2.number_input("株数", min_value=1, value=100, step=100, key=f"sh_{sym}")
-    st.caption(f"概算約定額: **{yen(shares * price)}**")
-    
-    if st.button("🚀 注文を出す", type="primary", use_container_width=True, key=f"ord_{sym}"):
+    st.caption(f"概算約定額　**{yen(shares * price)}**")
+    if st.button("注文を出す", type="primary", use_container_width=True, key=f"ord_{sym}"):
         ok, msg = execute_trade(sym, side, int(shares), price)
-        if ok:
-            st.success(f"✅ {msg}")
-            st.rerun()
-        else:
-            st.error(f"❌ {msg}")
-    
-    st.divider()
+        (st.success if ok else st.error)(msg)
     st.page_link(PG_TRADE, label="💼 ポートフォリオ全体を見る（デモトレード）")
 
 
@@ -1905,17 +953,13 @@ def render_order_form(sym: str, price: float | None) -> None:
 # ===========================================================================
 def page_favorites() -> None:
     st.markdown(
-        '<div class="gradient-header">'
-        '<h2>⭐ お気に入り銘柄</h2>'
-        '<p>お気に入りはアカウントごとに保存され、ログインすればいつでも見られます。</p>'
-        '</div>',
+        '<div class="app-header"><h1>⭐ お気に入り銘柄</h1>'
+        '<p>登録銘柄はこのPCの data/favorites.db に保存され、アプリを閉じても残ります</p></div>',
         unsafe_allow_html=True,
     )
-    
     favorites = fav_all()
     if st.session_state.get("fav_persist_err"):
         st.caption("⚠️ この環境ではファイル保存（SQLite）が使えないため、お気に入りはセッション内のみ保持されます。")
-    
     if favorites.empty:
         st.info("お気に入りはまだ登録されていません。検索結果や銘柄詳細の「☆ お気に入りに追加」から登録できます。")
         st.page_link(PG_HOME, label="🏠 銘柄検索へ")
@@ -1923,26 +967,20 @@ def page_favorites() -> None:
 
     with st.spinner("お気に入り銘柄の最新株価を取得しています…"):
         quotes = get_batch_quotes(tuple(favorites["code"].tolist()))
-    
     data = favorites.merge(quotes, left_on="code", right_on="yahoo_code", how="left") \
         if not quotes.empty else favorites.assign(現在値=None, 前日比率=None, 直近推移=None)
 
-    # サマリー（元のカードスタイルで表示）
     chg = pd.to_numeric(data.get("前日比率"), errors="coerce")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.markdown(card_html("登録銘柄", f"{len(data)}件"), unsafe_allow_html=True)
-    col2.markdown(card_html("値上がり", f"{int((chg > 0).sum())}件"), unsafe_allow_html=True)
-    col3.markdown(card_html("値下がり", f"{int((chg < 0).sum())}件"), unsafe_allow_html=True)
-    col4.markdown(card_html("株価未取得", f"{int(chg.isna().sum())}件"), unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("登録銘柄", f"{len(data)}件")
+    m2.metric("値上がり", f"{int((chg > 0).sum())}件")
+    m3.metric("値下がり", f"{int((chg < 0).sum())}件")
+    m4.metric("株価未取得", f"{int(chg.isna().sum())}件")
 
-    # フィルター
-    c1, c2, c3 = st.columns([2.5, 1.5, 1])
-    keyword = c1.text_input("🔍 検索", placeholder="銘柄名・コード・メモ", label_visibility="collapsed")
-    sort_option = c2.selectbox(
-        "並び順",
-        ["登録が新しい順", "値上がり率が高い順", "値下がり率が大きい順", "銘柄名順"],
-        label_visibility="collapsed"
-    )
+    c1, c2, c3 = st.columns([2.3, 1.4, 1])
+    keyword = c1.text_input("検索", placeholder="銘柄名・コード・メモ", label_visibility="collapsed")
+    sort_option = c2.selectbox("並び順", ["登録が新しい順", "値上がり率が高い順", "値下がり率が大きい順", "銘柄名順"],
+                               label_visibility="collapsed")
     if c3.button("🔄 株価を更新", use_container_width=True):
         get_batch_quotes.clear()
         st.rerun()
@@ -1956,7 +994,6 @@ def page_favorites() -> None:
             | filtered["note"].astype(str).str.contains(k, case=False, regex=False, na=False)
         )
         filtered = filtered.loc[mask]
-    
     if sort_option == "値上がり率が高い順":
         filtered = filtered.sort_values("前日比率", ascending=False, na_position="last")
     elif sort_option == "値下がり率が大きい順":
@@ -1971,72 +1008,52 @@ def page_favorites() -> None:
 
     display = filtered[["code", "name", "現在値", "前日比率", "直近推移", "note", "created_at"]].copy()
     display.columns = ["コード", "銘柄名", "現在値", "前日比率", "直近推移", "メモ", "登録日時"]
-    
     st.caption("行を選択すると、下にメモ編集・削除・詳細表示の操作が出ます。")
     event = st.dataframe(
-        display,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="fav_table",
+        display, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row", key="fav_table",
         column_config={
             "現在値": st.column_config.NumberColumn("現在値", format="%.1f"),
             "前日比率": st.column_config.NumberColumn("前日比（%）", format="%+.2f"),
             "直近推移": st.column_config.LineChartColumn("直近10日", width="medium"),
         },
     )
-    
     try:
         rows = list(event.selection.rows)
     except Exception:
         rows = []
-    
     if rows and 0 <= rows[0] < len(filtered):
         sel = filtered.iloc[rows[0]]
         code = str(sel["code"])
-        
         with st.container(border=True):
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"### {sel['name']}")
-                st.caption(f"コード: {code}")
-            with col2:
+            t1, t2 = st.columns([3, 1])
+            t1.subheader(f"{sel['name']}（{code}）")
+            with t2:
                 if st.button("📊 銘柄詳細を開く", use_container_width=True, key=f"open_{code}"):
                     open_detail(code)
-            
-            note = st.text_area(
-                "📝 メモ",
-                value=str(sel.get("note", "") or ""),
-                placeholder="例：決算後の値動きを確認する",
-                max_chars=500,
-                key=f"note_{code}"
-            )
-            
+            note = st.text_area("メモ", value=str(sel.get("note", "") or ""),
+                                placeholder="例：決算後の値動きを確認する", max_chars=500,
+                                key=f"note_{code}")
             b1, b2 = st.columns(2)
             if b1.button("💾 メモを保存", type="primary", use_container_width=True, key=f"sv_{code}"):
                 fav_note(code, note)
                 st.toast("メモを保存しました。", icon="✅")
                 st.rerun()
-            
             confirm = b2.checkbox("削除を確認", key=f"cf_{code}")
-            if b2.button("🗑️ お気に入りから削除", use_container_width=True, disabled=not confirm, key=f"rm_{code}"):
+            if b2.button("🗑️ お気に入りから削除", use_container_width=True,
+                         disabled=not confirm, key=f"rm_{code}"):
                 fav_remove(code)
                 st.toast("削除しました。", icon="🗑️")
                 st.rerun()
 
     csv = display.drop(columns=["直近推移"], errors="ignore")
-    st.download_button(
-        "📥 CSVで保存",
-        data=csv.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"お気に入り銘柄_{now_jst():%Y%m%d}.csv",
-        mime="text/csv"
-    )
-    
-    with st.expander("⚠️ その他の操作", expanded=False):
+    st.download_button("お気に入り一覧をCSVで保存",
+                       data=csv.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"お気に入り銘柄_{dt.datetime.now():%Y%m%d}.csv", mime="text/csv")
+    with st.expander("その他の操作"):
         st.warning("すべて削除すると元に戻せません。")
         ok_all = st.checkbox("すべてのお気に入りを削除することを確認しました")
-        if st.button("🗑️ すべて削除", disabled=not ok_all):
+        if st.button("すべて削除", disabled=not ok_all):
             n = fav_clear()
             st.toast(f"{n}件削除しました。", icon="🗑️")
             st.rerun()
@@ -2086,20 +1103,16 @@ GLOSSARY = pd.DataFrame({
 
 def page_glossary() -> None:
     st.markdown(
-        '<div class="gradient-header">'
-        '<h2>📚 株式指標一覧と解説</h2>'
-        '<p>株式投資でよく使用される代表的な指標を一覧で確認できます</p>'
-        '</div>',
+        '<div class="app-header"><h1>📚 株式指標一覧と解説</h1>'
+        '<p>株式投資でよく使用される代表的な指標を一覧で確認できます</p></div>',
         unsafe_allow_html=True,
     )
-    
-    cat = st.radio("📂 分類で絞り込み", ["すべて", "ファンダメンタル", "テクニカル"], horizontal=True)
+    cat = st.radio("分類で絞り込み", ["すべて", "ファンダメンタル", "テクニカル"], horizontal=True)
     df = GLOSSARY if cat == "すべて" else GLOSSARY[GLOSSARY["分類"] == cat]
     st.dataframe(df, use_container_width=True, hide_index=True)
-    
     st.info(
-        "**ファンダメンタル分析**：企業の業績や財務状況、将来性などを分析し、企業本来の価値を評価する分析方法です。\n\n"
-        "**テクニカル分析**：過去の株価や出来高などの値動きを分析し、今後の株価の動きを予測する分析方法です。"
+        "ファンダメンタル分析：企業の業績や財務状況、将来性などを分析し、企業本来の価値を評価する分析方法です。\n\n"
+        "テクニカル分析：過去の株価や出来高などの値動きを分析し、今後の株価の動きを予測する分析方法です。"
     )
     st.caption("テクニカル指標の実際の動きは、銘柄詳細の「📈 チャート」「🤖 テクニカル判定」タブで確認できます。")
 
@@ -2110,12 +1123,9 @@ def page_glossary() -> None:
 def page_trade() -> None:
     init_trade_state()
     ss = st.session_state
-    
     st.markdown(
-        '<div class="gradient-header">'
-        '<h2>💼 デモトレード</h2>'
-        '<p>yfinance の実データを使った日本株ペーパートレード（仮想資金100万円）</p>'
-        '</div>',
+        '<div class="app-header"><h1>💼 デモトレード</h1>'
+        '<p>yfinance の実データを使った日本株ペーパートレード（仮想資金100万円）</p></div>',
         unsafe_allow_html=True,
     )
 
@@ -2131,16 +1141,14 @@ def page_trade() -> None:
     pct = pnl / INITIAL_CASH * 100
     cls = "up" if pnl > 0 else ("down" if pnl < 0 else "muted")
     arrow = "▲" if pnl > 0 else ("▼" if pnl < 0 else "—")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.markdown(card_html("総資産", yen(total), f"{arrow} {yen(abs(pnl))}（{pct:+.2f}%）", cls), unsafe_allow_html=True)
-    col2.markdown(card_html("現金残高", yen(ss.cash)), unsafe_allow_html=True)
-    col3.markdown(card_html("株式評価額", yen(holdings_value)), unsafe_allow_html=True)
-    col4.markdown(card_html("累計損益", f"{pnl:+,.0f}", f"{pct:+.2f}%", cls), unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(card_html("総資産", yen(total), f"{arrow} {yen(abs(pnl))}（{pct:+.2f}%）", cls), unsafe_allow_html=True)
+    c2.markdown(card_html("現金残高", yen(ss.cash)), unsafe_allow_html=True)
+    c3.markdown(card_html("株式評価額", yen(holdings_value)), unsafe_allow_html=True)
+    c4.markdown(card_html("累計損益", f"{pnl:+,.0f}", f"{pct:+.2f}%", cls), unsafe_allow_html=True)
     st.write("")
 
     left, right = st.columns([1.6, 1])
-    
     with left:
         st.markdown("### 📦 保有ポジション")
         rows = []
@@ -2169,50 +1177,32 @@ def page_trade() -> None:
             st.dataframe(styled, use_container_width=True, hide_index=True)
         else:
             st.info("保有ポジションはありません。右の注文フォームから取引できます。")
-        
+
         st.markdown("### 🧾 取引履歴")
         if ss.trades:
             hist = pd.DataFrame(ss.trades[::-1])
             st.dataframe(hist, use_container_width=True, hide_index=True)
-            st.download_button(
-                "📥 CSVをダウンロード",
-                hist.to_csv(index=False).encode("utf-8-sig"),
-                file_name="trade_history.csv",
-                mime="text/csv"
-            )
+            st.download_button("CSVをダウンロード", hist.to_csv(index=False).encode("utf-8-sig"),
+                               file_name="trade_history.csv", mime="text/csv")
         else:
             st.info("まだ取引はありません。")
 
     with right:
         st.markdown("### 🛒 注文フォーム")
-        pending = ss.pop("_trade_code_pending", None)
-        if pending is not None:
-            ss["trade_code"] = pending
-        
         code = st.text_input("証券コード", placeholder="例: 7203", key="trade_code")
         ticker = normalize_jp(code)
         price = get_price(ticker) if ticker else None
-        
         if ticker and price:
-            st.markdown(f"""
-            <div style="background:#f8faff;border-radius:14px;padding:14px 18px;margin-bottom:12px;border:1px solid #eef2f6;">
-                <div style="font-weight:600;font-size:0.85rem;color:#4a5a6e;">{label_of(ticker)}</div>
-                <div style="font-size:1.5rem;font-weight:700;color:#1a2634;">¥{price:,.1f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
+            st.markdown(card_html(label_of(ticker), f"¥{price:,.1f}"), unsafe_allow_html=True)
             s1, s2 = st.columns(2)
             side = s1.radio("売買", ["買い", "売り"], horizontal=True, key="pt_side")
             shares = s2.number_input("株数", min_value=1, value=100, step=100, key="pt_shares")
-            st.caption(f"概算約定額: **{yen(shares * price)}**")
-            
-            if st.button("🚀 注文を出す", type="primary", use_container_width=True):
+            st.caption(f"概算約定額　**{yen(shares * price)}**")
+            if st.button("注文を出す", type="primary", use_container_width=True):
                 ok, msg = execute_trade(ticker, side, int(shares), price)
+                (st.success if ok else st.error)(msg)
                 if ok:
-                    st.success(f"✅ {msg}")
                     st.rerun()
-                else:
-                    st.error(f"❌ {msg}")
         elif ticker:
             st.warning("価格を取得できませんでした。コードを確認してください。")
         else:
@@ -2222,7 +1212,7 @@ def page_trade() -> None:
         qcols = st.columns(2)
         for i, tk in enumerate(QUICK_TICKERS):
             if qcols[i % 2].button(CODE2NAME.get(tk, tk), key=f"pq_{tk}", use_container_width=True):
-                ss["_trade_code_pending"] = tk.replace(".T", "")
+                ss["trade_code"] = tk.replace(".T", "")
                 st.rerun()
 
         st.divider()
@@ -2230,13 +1220,12 @@ def page_trade() -> None:
             for k in ("cash", "positions", "trades"):
                 ss.pop(k, None)
             init_trade_state()
-            portfolio_save()
             st.rerun()
         st.caption("※ デモ（ペーパートレード）です。実際の取引は行われません。")
 
 
 # ===========================================================================
-# ナビゲーション
+# ナビゲーション（左上ハンバーガーメニュー）
 # ===========================================================================
 PG_HOME = st.Page(page_home, title="ホーム（銘柄検索）", icon="🏠", url_path="home", default=True)
 PG_DETAIL = st.Page(page_detail, title="銘柄詳細", icon="📊", url_path="detail")
@@ -2245,183 +1234,33 @@ PG_GLOSSARY = st.Page(page_glossary, title="指標解説", icon="📚", url_path
 PG_TRADE = st.Page(page_trade, title="デモトレード", icon="💼", url_path="trade")
 
 
-def _sidebar_nav(current_title: str) -> None:
-    """スクリーンショットのようなブランド付き左サイドナビを描画する。"""
-    with st.sidebar:
-        st.markdown(
-            '<div class="brand-box">'
-            '<div class="brand-icon">📈</div>'
-            '<div><div class="brand-name">うめぇ〜go株</div>'
-            '<span class="brand-badge">PRO</span></div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        pages = [
-            (PG_HOME, "ホーム（銘柄検索）", "🏠"),
-            (PG_DETAIL, "銘柄詳細", "📊"),
-            (PG_FAV, "お気に入り銘柄", "⭐"),
-            (PG_GLOSSARY, "指標解説", "📚"),
-            (PG_TRADE, "デモトレード", "💼"),
-        ]
-        for page, label, icon in pages:
-            active = (label == current_title)
-            wrap_class = "nav-active" if active else "nav-inactive"
-            st.markdown(f'<div class="{wrap_class}">', unsafe_allow_html=True)
-            st.page_link(page, label=label, icon=icon, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # ミニウィジェット: デモ口座の資産サマリー（実データ）
-        init_trade_state()
-        ss = st.session_state
-        holdings_value = 0.0
-        for tk, pos in ss.positions.items():
-            if pos.shares:
-                p = get_price(tk)
-                if p:
-                    holdings_value += pos.shares * p
-        total = ss.cash + holdings_value
-        pnl = total - INITIAL_CASH
-        pct = pnl / INITIAL_CASH * 100 if INITIAL_CASH else 0.0
-        arrow = "▲" if pnl > 0 else ("▼" if pnl < 0 else "—")
-        st.markdown(
-            f'<div class="side-widget">'
-            f'<div class="sw-label">デモ口座 総資産</div>'
-            f'<div class="sw-value">{yen(total)}</div>'
-            f'<div class="sw-sub">{arrow} {yen(abs(pnl))}（{pct:+.2f}%）</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ミニウィジェット: 日経平均（実データ）
-        n225 = get_price("^N225")
-        n225_hist = get_history("^N225", "5d", "1d")
-        n_chg_html = ""
-        if n225 is not None and len(n225_hist) >= 2:
-            prev = float(n225_hist["Close"].iloc[-2])
-            if prev > 0:
-                d = n225 - prev
-                p = d / prev * 100
-                cls = "up" if d >= 0 else "down"
-                arrow2 = "▲" if d >= 0 else "▼"
-                n_chg_html = f'<div class="sw-sub {cls}">{arrow2} {d:+,.2f}（{p:+.2f}%）</div>'
-        value_html = f'{n225:,.2f}' if n225 is not None else 'N/A'
-        st.markdown(
-            '<div class="side-widget-light">'
-            '<div class="sw-label"><span>日経平均</span><span>^N225</span></div>'
-            f'<div class="sw-value">{value_html}</div>'
-            f'{n_chg_html}'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # アカウント情報 ＋ ログアウト
-        st.markdown(
-            '<div class="side-widget-light">'
-            '<div class="sw-label"><span>👤 ログイン中</span></div>'
-            f'<div class="sw-value" style="font-size:0.98rem;">{current_user()}</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("🚪 ログアウト", use_container_width=True, key="logout_btn"):
-            portfolio_save()
-            for k in ("user", "cash", "positions", "trades", "fav_mem", "sym"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
-
-def render_auth() -> None:
-    """ログイン / アカウント作成ページ（新デザイン）"""
-    _, center, _ = st.columns([1, 1.6, 1])
-    with center:
-        st.write("")
-        st.markdown(
-            '<div class="gradient-header">'
-            '<h2>📈 うめぇ〜go株</h2>'
-            '<p>IDとパスワードでログイン、または新規登録してください</p>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        tab_login, tab_signup = st.tabs(["🔑 ログイン", "🆕 アカウント作成"])
-
-        with tab_login:
-            u = st.text_input("ID（ユーザー名）", key="login_user")
-            p = st.text_input("パスワード", type="password", key="login_pass")
-            if st.button("ログイン", type="primary", use_container_width=True):
-                if user_verify(u.strip(), p):
-                    st.session_state["user"] = u.strip()
-                    portfolio_load(u.strip())
-                    st.rerun()
-                else:
-                    st.error("IDまたはパスワードが違います。")
-
-        with tab_signup:
-            u2 = st.text_input("ID（ユーザー名）", key="signup_user", placeholder="例: taro")
-            p2 = st.text_input("パスワード", type="password", key="signup_pass")
-            p3 = st.text_input("パスワード（確認）", type="password", key="signup_pass2")
-            if st.button("アカウントを作成", type="primary", use_container_width=True):
-                if not u2.strip() or not p2:
-                    st.error("IDとパスワードを入力してください。")
-                elif p2 != p3:
-                    st.error("確認用パスワードが一致しません。")
-                elif user_create(u2.strip(), p2):
-                    st.session_state["user"] = u2.strip()
-                    portfolio_load(u2.strip())
-                    st.rerun()
-                else:
-                    st.error("このIDは既に使われています。別のIDを入力してください。")
-
-        st.caption("※ 学習用アプリのためパスワードは平文で保存されます。普段使っているパスワードは入力しないでください。")
-        if not DB_URL:
-            st.caption("※ 外部データベース（DATABASE_URL）が未設定です。この状態ではサーバー再起動時に"
-                       "アカウントが消えることがあります。設定方法は README を参照してください。")
-
-
-def _on_global_search() -> None:
-    st.session_state["_sr"] = st.session_state.get("global_search", "")
-
-
 def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
+    nav = st.navigation([PG_HOME, PG_DETAIL, PG_FAV, PG_GLOSSARY, PG_TRADE], position="hidden")
+
+    # 左上ハンバーガーメニュー（全ページ共通・固定）
+    mcol, tcol = st.columns([0.08, 0.92])
+    with mcol:
+        with st.popover("☰", use_container_width=True):
+            st.markdown("**メニュー**")
+            st.page_link(PG_HOME, label="ホーム（銘柄検索）", icon="🏠")
+            st.page_link(PG_DETAIL, label="銘柄詳細", icon="📊")
+            st.page_link(PG_FAV, label="お気に入り銘柄", icon="⭐")
+            st.page_link(PG_GLOSSARY, label="指標解説", icon="📚")
+            st.page_link(PG_TRADE, label="デモトレード", icon="💼")
+    tcol.markdown(
+        f'<div style="font-weight:700;font-size:1.05rem;padding-top:6px;">📈 うめぇ〜go株'
+        f'<span style="color:#8a94a6;font-weight:600;font-size:.8rem;">'
+        f'　{dt.datetime.now():%Y/%m/%d %H:%M} 時点</span></div>',
+        unsafe_allow_html=True,
+    )
 
     if yf is None:
         st.error("`yfinance` がインストールされていません。`pip install yfinance` を実行してください。")
         st.stop()
 
-    # 未ログインならログイン/新規登録ページのみ表示
-    if not st.session_state.get("user"):
-        render_auth()
-        return
-
-    nav = st.navigation([PG_HOME, PG_DETAIL, PG_FAV, PG_GLOSSARY, PG_TRADE], position="hidden")
-
-    _sidebar_nav(nav.title)
-
-    # ===== 修改区域：顶部布局（向左移靠，将搜索框放在右侧并往下推一点） =====
-    c_left, c_mid, c_search = st.columns([3, 2, 3])
-    
-    with c_left:
-        st.write("") # 占位，保持左侧清爽
-    
-    with c_mid:
-        now = now_jst()
-        market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 30) and now.weekday() < 5
-        status_text = "市場は開いています" if market_open else "市場は閉じています"
-        st.markdown(
-            f'<div class="topbar-time" style="display:inline-flex; margin:0 auto;">'
-            f'<span class="dot"></span>{now:%Y/%m/%d %H:%M} 時点　・　{status_text}</div>',
-            unsafe_allow_html=True,
-        )
-
-    with c_search:
-        st.text_input(
-            "🔍 銘柄名・コードを検索",
-            placeholder="例: トヨタ, 7203.T",
-            label_visibility="collapsed",
-            key="global_search",
-            on_change=_on_global_search,
-        )
     nav.run()
+
 
 if __name__ == "__main__":
     main()
