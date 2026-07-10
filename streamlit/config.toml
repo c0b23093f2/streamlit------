@@ -1,8 +1,0 @@
-# デバイスのダークモード設定に関係なく、常にライトテーマで表示する
-# （アプリのデザインが明色ベースのため）
-[theme]
-base = "light"
-primaryColor = "#4f7df3"
-backgroundColor = "#f5f7fb"
-secondaryBackgroundColor = "#ffffff"
-textColor = "#1a2234"
