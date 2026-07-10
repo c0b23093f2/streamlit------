@@ -980,11 +980,21 @@ _CREATE_FAVS = (
 )
 
 
+def _normalize_db_url(url: str) -> str:
+    """接続文字列の書式ゆれを吸収し、psycopg(v3)ドライバを使うURLに揃える。"""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    url = url.replace("postgresql+psycopg2://", "postgresql://")
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 @st.cache_resource(show_spinner=False)
 def _engine():
     """外部DB（PostgreSQL等）のエンジンを作成し、テーブルを初期化する。"""
     from sqlalchemy import create_engine, text
-    eng = create_engine(DB_URL, pool_pre_ping=True)
+    eng = create_engine(_normalize_db_url(DB_URL), pool_pre_ping=True)
     with eng.begin() as c:
         c.execute(text(_CREATE_USERS))
         c.execute(text(_CREATE_FAVS))
