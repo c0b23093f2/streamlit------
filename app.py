@@ -35,9 +35,19 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# --- カラーパレット（モダンリッチ） ---
 UP = "#16c784"
 DOWN = "#ea3943"
 ACCENT = "#5b8def"
+ACCENT_LIGHT = "#93bbfd"
+GOLD = "#f0b90b"
+PURPLE = "#9b59b6"
+SLATE_50 = "#f8fafc"
+SLATE_100 = "#f1f5f9"
+SLATE_200 = "#e2e8f0"
+SLATE_600 = "#475569"
+SLATE_500 = "#64748b"
+
 INITIAL_CASH = 1_000_000  # デモトレード初期資金（円）
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -85,30 +95,152 @@ QUICK_TICKERS = ["7203.T", "9984.T", "6758.T", "8306.T", "9432.T", "6861.T", "80
 # ランキング対象（JMAP収載の個別銘柄）
 RANK_UNIVERSE = tuple(sorted({c for c in JMAP.values() if not c.startswith("^")}))
 
+# ===================================================================
+# 💅 リッチCSS — ダークナビ・グラスモーフィズム・スムーズアニメーション
+# ===================================================================
 CSS = """
 <style>
-.block-container { padding-top: 1.0rem; padding-bottom: 2rem; max-width: 1200px; }
+/* === 全体ベース === */
+.block-container { padding-top: 0.5rem; padding-bottom: 2rem; max-width: 1200px; }
 #MainMenu, footer { visibility: hidden; }
+header[data-testid="stHeader"] { background: transparent; }
+.stApp { background: #f8fafc; }
 
+/* === トップナビゲーションバー（全ページ固定） === */
+.top-nav {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+    border-radius: 18px;
+    padding: 8px 20px 8px 14px;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 6px 28px rgba(15,23,42,0.35);
+}
+.top-nav .brand {
+    font-weight: 800;
+    font-size: 1.10rem;
+    color: #fff;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    margin-right: 8px;
+}
+.top-nav .brand span.gold {
+    background: linear-gradient(90deg, #f0b90b, #f59e0b);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 800;
+}
+.top-nav .clock {
+    color: rgba(255,255,255,0.50);
+    font-size: 0.70rem;
+    font-weight: 500;
+    margin-left: auto;
+    white-space: nowrap;
+}
+.nav-link {
+    background: transparent;
+    border: none;
+    border-radius: 12px;
+    color: rgba(255,255,255,0.60);
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.nav-link:hover { background: rgba(255,255,255,0.10); color: #fff; }
+.nav-link.active {
+    background: rgba(255,255,255,0.14);
+    color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+/* === ページヘッダー（グラデーションカード） === */
 .app-header {
-    background: linear-gradient(120deg, #1e3a8a 0%, #2563eb 55%, #3b82f6 100%);
-    border-radius: 16px; padding: 18px 24px; color: #fff; margin-bottom: 16px;
-    box-shadow: 0 8px 24px rgba(37,99,235,.25);
+    background: linear-gradient(135deg, #1e40af 0%, #3b82f6 60%, #60a5fa 100%);
+    border-radius: 18px;
+    padding: 20px 28px;
+    color: #fff;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 28px rgba(59,130,246,0.28);
+    position: relative;
+    overflow: hidden;
 }
-.app-header h1 { margin: 0; font-size: 1.4rem; font-weight: 700; }
-.app-header p { margin: 4px 0 0; opacity: .9; font-size: .82rem; }
+.app-header::after {
+    content: '';
+    position: absolute;
+    top: -40%;
+    right: -8%;
+    width: 180px; height: 180px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 50%;
+}
+.app-header h1 { margin: 0; font-size: 1.35rem; font-weight: 700; position: relative; z-index: 1; }
+.app-header p { margin: 4px 0 0; opacity: .85; font-size: .82rem; position: relative; z-index: 1; }
 
+/* === カード === */
 .card {
-    background: #ffffff; border: 1px solid rgba(128,128,128,.18);
-    border-radius: 14px; padding: 14px 16px; height: 100%;
-    box-shadow: 0 2px 10px rgba(0,0,0,.04);
+    background: #ffffff;
+    border: 1px solid rgba(148,163,184,0.12);
+    border-radius: 16px;
+    padding: 16px 18px;
+    height: 100%;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.card .label { font-size: .75rem; color: #8a94a6; font-weight: 600; }
-.card .value { font-size: 1.35rem; font-weight: 700; margin-top: 4px; line-height: 1.15; }
-.card .sub { font-size: .8rem; margin-top: 2px; font-weight: 600; }
-.up { color: #16c784; } .down { color: #ea3943; } .muted { color: #8a94a6; }
-.stButton > button { border-radius: 10px; font-weight: 600; }
-div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
+.card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+.card .label { font-size: .74rem; color: #64748b; font-weight: 600; letter-spacing: 0.3px; }
+.card .value { font-size: 1.45rem; font-weight: 700; margin-top: 3px; line-height: 1.15; letter-spacing: -0.3px; }
+.card .sub { font-size: .80rem; margin-top: 3px; font-weight: 600; }
+.up { color: #16c784; } .down { color: #ea3943; } .muted { color: #94a3b8; }
+
+/* === ボタン === */
+.stButton > button {
+    border-radius: 12px !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    transition: all 0.15s ease !important;
+}
+.stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.10); }
+
+/* === テーブル === */
+div[data-testid="stDataFrame"] { border-radius: 14px; overflow: hidden; }
+
+/* === メトリクス === */
+[data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid rgba(148,163,184,0.12);
+    border-radius: 14px;
+    padding: 12px 16px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+}
+[data-testid="stMetricLabel"] { font-weight: 600 !important; color: #64748b !important; font-size: 0.75rem !important; }
+[data-testid="stMetricValue"] { font-weight: 700 !important; }
+
+/* === タブ === */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; }
+.stTabs [data-baseweb="tab"] {
+    border-radius: 12px 12px 0 0 !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    padding: 8px 18px !important;
+}
+
+/* === info/warning/error ボックス === */
+div[data-testid="stAlert"] { border-radius: 14px !important; }
+
+/* === 区切り線 === */
+hr { margin: 28px 0 !important; border-color: rgba(148,163,184,0.15) !important; }
+
+/* === その他微調整 === */
+.stRadio > label { font-weight: 500 !important; }
+.stSelectbox > div > div { border-radius: 12px !important; }
 </style>
 """
 
@@ -1234,31 +1366,43 @@ PG_GLOSSARY = st.Page(page_glossary, title="指標解説", icon="📚", url_path
 PG_TRADE = st.Page(page_trade, title="デモトレード", icon="💼", url_path="trade")
 
 
+def _render_top_nav(current_page: str) -> None:
+    """モダンな横長トップナビゲーションバー"""
+    pages = [
+        ("🏠", "ホーム", PG_HOME, "home"),
+        ("📊", "銘柄詳細", PG_DETAIL, "detail"),
+        ("⭐", "お気に入り", PG_FAV, "favorites"),
+        ("📚", "指標解説", PG_GLOSSARY, "glossary"),
+        ("💼", "デモトレード", PG_TRADE, "trade"),
+    ]
+    clock = dt.datetime.now().strftime("%m/%d %H:%M")
+    links_html = ""
+    for icon, label, pg, key in pages:
+        cls = 'nav-link active' if key == current_page else 'nav-link'
+        links_html += f'<a class="{cls}" href="{pg.url_path}" target="_self">{icon} {label}</a>'
+    st.markdown(
+        f'<div class="top-nav">'
+        f'<div class="brand">📈 <span class="gold">うめぇ〜go株</span></div>'
+        f'{links_html}'
+        f'<div class="clock">🕐 {clock}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     nav = st.navigation([PG_HOME, PG_DETAIL, PG_FAV, PG_GLOSSARY, PG_TRADE], position="hidden")
-
-    # 左上ハンバーガーメニュー（全ページ共通・固定）
-    mcol, tcol = st.columns([0.08, 0.92])
-    with mcol:
-        with st.popover("☰", use_container_width=True):
-            st.markdown("**メニュー**")
-            st.page_link(PG_HOME, label="ホーム（銘柄検索）", icon="🏠")
-            st.page_link(PG_DETAIL, label="銘柄詳細", icon="📊")
-            st.page_link(PG_FAV, label="お気に入り銘柄", icon="⭐")
-            st.page_link(PG_GLOSSARY, label="指標解説", icon="📚")
-            st.page_link(PG_TRADE, label="デモトレード", icon="💼")
-    tcol.markdown(
-        f'<div style="font-weight:700;font-size:1.05rem;padding-top:6px;">📈 うめぇ〜go株'
-        f'<span style="color:#8a94a6;font-weight:600;font-size:.8rem;">'
-        f'　{dt.datetime.now():%Y/%m/%d %H:%M} 時点</span></div>',
-        unsafe_allow_html=True,
-    )
 
     if yf is None:
         st.error("`yfinance` がインストールされていません。`pip install yfinance` を実行してください。")
         st.stop()
 
+    # 現在のページを判別
+    cur = st.query_params.get("page", ["home"])[0] if hasattr(st, "query_params") and st.query_params else "home"
+    page_key = nav._current_page.url_path if hasattr(nav, "_current_page") and nav._current_page else cur
+
+    _render_top_nav(page_key)
     nav.run()
 
 
