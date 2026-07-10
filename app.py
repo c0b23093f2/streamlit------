@@ -1,14 +1,3 @@
-"""
-📈 うめぇ〜go株 — 統合版（1ファイル・マルチページ）
-
-構成:
-    ホーム（銘柄検索・ランキング） → 銘柄詳細（チャート/テクニカル判定/予測/ニュース/決算）
-    左上の ☰ ハンバーガーメニューから 指標解説・お気に入り銘柄・デモトレード へ移動
-
-実行方法:
-    pip install -r requirements.txt
-    streamlit run app.py
-"""
 
 from __future__ import annotations
 
@@ -106,7 +95,8 @@ header[data-testid="stHeader"] { background: transparent; }
     box-shadow: 0 2px 10px rgba(0,0,0,.04);
 }
 .card .label { font-size: .75rem; color: #8a94a6; font-weight: 600; }
-.card .value { font-size: 1.35rem; font-weight: 700; margin-top: 4px; line-height: 1.15; }
+/* カード背景は常に白のため、文字色も固定（ダークモードで白文字にならないように） */
+.card .value { font-size: 1.35rem; font-weight: 700; margin-top: 4px; line-height: 1.15; color: #111827; }
 .card .sub { font-size: .8rem; margin-top: 2px; font-weight: 600; }
 .up { color: #16c784; } .down { color: #ea3943; } .muted { color: #8a94a6; }
 .stButton > button { border-radius: 10px; font-weight: 600; }
@@ -605,7 +595,7 @@ def page_home() -> None:
 
     # --- ランキング ---
     st.divider()
-    st.markdown("### 📊 銘柄ランキング（主要銘柄）")
+    st.markdown("### 📊 銘柄ランキング")
     with st.spinner("ランキングデータを取得しています…"):
         rank = get_batch_quotes(RANK_UNIVERSE, period="5d")
     if rank.empty:
@@ -820,7 +810,7 @@ def render_technical(sym: str, name: str, cu: str) -> None:
     t = technical_judgment(df)
     price = float(df["Close"].iloc[-1])
     st.markdown(f"""
-<div style="border:1px solid #e0e0e0;border-radius:16px;padding:28px;background-color:#fafafa;margin-bottom:12px;">
+<div style="border:1px solid #e0e0e0;border-radius:16px;padding:28px;background-color:#fafafa;color:#111827;margin-bottom:12px;">
   <div style="font-size:22px;font-weight:bold;margin-bottom:4px;">{name}</div>
   <div style="color:#666;font-size:14px;margin-bottom:14px;">現在価格</div>
   <div style="font-size:30px;font-weight:bold;margin-bottom:14px;">{cu}{price:,.0f}</div>
@@ -947,7 +937,7 @@ def render_order_form(sym: str, price: float | None) -> None:
     if st.button("注文を出す", type="primary", use_container_width=True, key=f"ord_{sym}"):
         ok, msg = execute_trade(sym, side, int(shares), price)
         (st.success if ok else st.error)(msg)
-    st.page_link(PG_TRADE, label="💼 ポートフォリオ全体を見る（デモトレード）")
+    st.page_link(PG_TRADE, label="ポートフォリオ全体を見る（デモトレード）")
 
 
 # ===========================================================================
@@ -956,7 +946,7 @@ def render_order_form(sym: str, price: float | None) -> None:
 def page_favorites() -> None:
     st.markdown(
         '<div class="app-header"><h1>⭐ お気に入り銘柄</h1>'
-        '<p>登録銘柄はこのPCの data/favorites.db に保存され、アプリを閉じても残ります</p></div>',
+        '<p>登録したお気に入りは、この端末に保存され、アプリを閉じても残ります。</p></div>',
         unsafe_allow_html=True,
     )
     favorites = fav_all()
@@ -964,7 +954,7 @@ def page_favorites() -> None:
         st.caption("⚠️ この環境ではファイル保存（SQLite）が使えないため、お気に入りはセッション内のみ保持されます。")
     if favorites.empty:
         st.info("お気に入りはまだ登録されていません。検索結果や銘柄詳細の「☆ お気に入りに追加」から登録できます。")
-        st.page_link(PG_HOME, label="🏠 銘柄検索へ")
+        st.page_link(PG_HOME, label="銘柄検索へ")
         return
 
     with st.spinner("お気に入り銘柄の最新株価を取得しています…"):
