@@ -13,6 +13,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -37,6 +38,13 @@ DOWN = "#ea3943"
 ACCENT = "#5b8def"
 ACCENT_LIGHT = "#7ca5f0"
 INITIAL_CASH = 1_000_000
+
+# サーバーがどのタイムゾーンで動いていても、常に日本時間で表示する
+JST = ZoneInfo("Asia/Tokyo")
+
+
+def now_jst() -> dt.datetime:
+    return dt.datetime.now(JST)
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "favorites.db"
@@ -877,19 +885,70 @@ def technical_judgment(df: pd.DataFrame) -> dict:
 # ---------------------------------------------------------------------------
 # お気に入り
 # ---------------------------------------------------------------------------
+def _secret_db_url() -> str:
+    """Streamlit Secrets の DATABASE_URL（外部DB）。
+    設定されていれば PostgreSQL 等の外部DBを使い、サーバー再起動後もデータが残る。
+    未設定ならローカルSQLite（再起動で消える環境あり）を使う。"""
+    try:
+        return str(st.secrets.get("DATABASE_URL", "") or "")
+    except Exception:
+        return ""
+
+
+DB_URL = _secret_db_url()
+
+_CREATE_USERS = (
+    "CREATE TABLE IF NOT EXISTS users ("
+    "username TEXT PRIMARY KEY, password TEXT, created_at TEXT, portfolio TEXT DEFAULT '')"
+)
+_CREATE_FAVS = (
+    "CREATE TABLE IF NOT EXISTS user_favorites ("
+    "username TEXT, code TEXT, name TEXT, note TEXT DEFAULT '', created_at TEXT, "
+    "PRIMARY KEY (username, code))"
+)
+
+
+@st.cache_resource(show_spinner=False)
+def _engine():
+    """外部DB（PostgreSQL等）のエンジンを作成し、テーブルを初期化する。"""
+    from sqlalchemy import create_engine, text
+    eng = create_engine(DB_URL, pool_pre_ping=True)
+    with eng.begin() as c:
+        c.execute(text(_CREATE_USERS))
+        c.execute(text(_CREATE_FAVS))
+    return eng
+
+
 def _db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS users ("
-        "username TEXT PRIMARY KEY, password TEXT, created_at TEXT, portfolio TEXT DEFAULT '')"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS user_favorites ("
-        "username TEXT, code TEXT, name TEXT, note TEXT DEFAULT '', created_at TEXT, "
-        "PRIMARY KEY (username, code))"
-    )
+    conn.execute(_CREATE_USERS)
+    conn.execute(_CREATE_FAVS)
     return conn
+
+
+def _db_exec(sql: str, params: dict | None = None) -> int:
+    """INSERT/UPDATE/DELETE を実行し、影響行数を返す（:name 形式のパラメータ）。"""
+    if DB_URL:
+        from sqlalchemy import text
+        with _engine().begin() as c:
+            return c.execute(text(sql), params or {}).rowcount
+    with _db() as conn:
+        return conn.execute(sql, params or {}).rowcount
+
+
+def _db_fetchall(sql: str, params: dict | None = None) -> list[tuple]:
+    if DB_URL:
+        from sqlalchemy import text
+        with _engine().connect() as c:
+            return [tuple(r) for r in c.execute(text(sql), params or {}).fetchall()]
+    with _db() as conn:
+        return conn.execute(sql, params or {}).fetchall()
+
+
+def _db_fetchone(sql: str, params: dict | None = None) -> tuple | None:
+    rows = _db_fetchall(sql, params)
+    return rows[0] if rows else None
 
 
 def _mem() -> dict:
@@ -907,14 +966,14 @@ def current_user() -> str:
 # --- ユーザー管理（学習用のため平文保存。セキュリティは考慮しない） ---
 def user_create(username: str, password: str) -> bool:
     """作成できたら True、既に存在すれば False。"""
-    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
+    now = now_jst().strftime("%Y/%m/%d %H:%M")
     try:
-        with _db() as conn:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO users (username, password, created_at) VALUES (?,?,?)",
-                (username, password, now),
-            )
-            return cur.rowcount > 0
+        n = _db_exec(
+            "INSERT INTO users (username, password, created_at) VALUES (:u, :p, :c) "
+            "ON CONFLICT (username) DO NOTHING",
+            {"u": username, "p": password, "c": now},
+        )
+        return n > 0
     except Exception:
         _use_mem()
         users = st.session_state.setdefault("users_mem", {})
@@ -926,10 +985,7 @@ def user_create(username: str, password: str) -> bool:
 
 def user_verify(username: str, password: str) -> bool:
     try:
-        with _db() as conn:
-            row = conn.execute(
-                "SELECT password FROM users WHERE username=?", (username,)
-            ).fetchone()
+        row = _db_fetchone("SELECT password FROM users WHERE username=:u", {"u": username})
         return row is not None and row[0] == password
     except Exception:
         _use_mem()
@@ -948,9 +1004,8 @@ def portfolio_save() -> None:
         "trades": ss.get("trades", []),
     }
     try:
-        with _db() as conn:
-            conn.execute("UPDATE users SET portfolio=? WHERE username=?",
-                         (json.dumps(data, ensure_ascii=False), user))
+        _db_exec("UPDATE users SET portfolio=:p WHERE username=:u",
+                 {"p": json.dumps(data, ensure_ascii=False), "u": user})
     except Exception:
         _use_mem()  # フォールバック環境ではセッション内のみ保持
 
@@ -962,8 +1017,7 @@ def portfolio_load(user: str) -> None:
     ss["positions"] = {}
     ss["trades"] = []
     try:
-        with _db() as conn:
-            row = conn.execute("SELECT portfolio FROM users WHERE username=?", (user,)).fetchone()
+        row = _db_fetchone("SELECT portfolio FROM users WHERE username=:u", {"u": user})
         if row and row[0]:
             d = json.loads(row[0])
             ss["cash"] = float(d.get("cash", INITIAL_CASH))
@@ -978,13 +1032,12 @@ def portfolio_load(user: str) -> None:
 def fav_all() -> pd.DataFrame:
     cols = ["code", "name", "note", "created_at"]
     try:
-        with _db() as conn:
-            df = pd.read_sql_query(
-                "SELECT code, name, note, created_at FROM user_favorites "
-                "WHERE username=? ORDER BY created_at DESC",
-                conn, params=(current_user(),),
-            )
-        return df if not df.empty else pd.DataFrame(columns=cols)
+        rows = _db_fetchall(
+            "SELECT code, name, note, created_at FROM user_favorites "
+            "WHERE username=:u ORDER BY created_at DESC",
+            {"u": current_user()},
+        )
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
     except Exception:
         _use_mem()
         rows = [{"code": k, **v} for k, v in _mem().items()]
@@ -993,23 +1046,22 @@ def fav_all() -> pd.DataFrame:
 
 def fav_codes() -> set[str]:
     try:
-        with _db() as conn:
-            return {r[0] for r in conn.execute(
-                "SELECT code FROM user_favorites WHERE username=?", (current_user(),))}
+        rows = _db_fetchall("SELECT code FROM user_favorites WHERE username=:u",
+                            {"u": current_user()})
+        return {r[0] for r in rows}
     except Exception:
         _use_mem()
         return set(_mem())
 
 
 def fav_add(code: str, name: str) -> None:
-    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
+    now = now_jst().strftime("%Y/%m/%d %H:%M")
     try:
-        with _db() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO user_favorites (username, code, name, note, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (current_user(), code, name, "", now),
-            )
+        _db_exec(
+            "INSERT INTO user_favorites (username, code, name, note, created_at) "
+            "VALUES (:u, :c, :n, '', :t) ON CONFLICT (username, code) DO NOTHING",
+            {"u": current_user(), "c": code, "n": name, "t": now},
+        )
     except Exception:
         _use_mem()
         _mem().setdefault(code, {"name": name, "note": "", "created_at": now})
@@ -1017,9 +1069,8 @@ def fav_add(code: str, name: str) -> None:
 
 def fav_remove(code: str) -> None:
     try:
-        with _db() as conn:
-            conn.execute("DELETE FROM user_favorites WHERE username=? AND code=?",
-                         (current_user(), code))
+        _db_exec("DELETE FROM user_favorites WHERE username=:u AND code=:c",
+                 {"u": current_user(), "c": code})
     except Exception:
         _use_mem()
         _mem().pop(code, None)
@@ -1027,9 +1078,8 @@ def fav_remove(code: str) -> None:
 
 def fav_note(code: str, note: str) -> None:
     try:
-        with _db() as conn:
-            conn.execute("UPDATE user_favorites SET note=? WHERE username=? AND code=?",
-                         (note, current_user(), code))
+        _db_exec("UPDATE user_favorites SET note=:n WHERE username=:u AND code=:c",
+                 {"n": note, "u": current_user(), "c": code})
     except Exception:
         _use_mem()
         if code in _mem():
@@ -1038,11 +1088,11 @@ def fav_note(code: str, note: str) -> None:
 
 def fav_clear() -> int:
     try:
-        with _db() as conn:
-            n = conn.execute("SELECT COUNT(*) FROM user_favorites WHERE username=?",
-                             (current_user(),)).fetchone()[0]
-            conn.execute("DELETE FROM user_favorites WHERE username=?", (current_user(),))
-            return n
+        row = _db_fetchone("SELECT COUNT(*) FROM user_favorites WHERE username=:u",
+                           {"u": current_user()})
+        n = int(row[0]) if row else 0
+        _db_exec("DELETE FROM user_favorites WHERE username=:u", {"u": current_user()})
+        return n
     except Exception:
         _use_mem()
         n = len(_mem())
@@ -1104,7 +1154,7 @@ def execute_trade(ticker: str, side: str, shares: int, price: float) -> tuple[bo
             pos.cost_basis = 0.0
     ss.positions[ticker] = pos
     ss.trades.append({
-        "日時": dt.datetime.now().strftime("%m-%d %H:%M:%S"),
+        "日時": now_jst().strftime("%m-%d %H:%M:%S"),
         "銘柄": label_of(ticker),
         "売買": side,
         "株数": shares,
@@ -1451,9 +1501,32 @@ def page_home() -> None:
 # ===========================================================================
 # ページ: 銘柄詳細
 # ===========================================================================
+def resolve_symbol(k: str) -> str | None:
+    """入力文字列から実在する銘柄のティッカーを解決する。見つからなければ None。"""
+    k = (k or "").strip()
+    if not k:
+        return None
+    if k in JMAP:
+        return JMAP[k]
+    # 日本語名の部分一致
+    for name, code in JMAP.items():
+        if k in name or name in k:
+            return code
+    # コードとして解釈し、実在確認（企業情報 or 価格が取れるもののみ有効）
+    for cand in dict.fromkeys([normalize_jp(k), k.upper() if not k.isdigit() else ""]):
+        if not cand:
+            continue
+        info = get_info(cand)
+        if info and (info.get("longName") or info.get("shortName")):
+            return cand
+        if get_price(cand) is not None:
+            return cand
+    return None
+
+
 def page_detail() -> None:
     ss = st.session_state
-    
+
     with st.container():
         c1, c2 = st.columns([4, 1])
         code_in = c1.text_input(
@@ -1463,9 +1536,14 @@ def page_detail() -> None:
             key="detail_kw"
         )
         if c2.button("表示", type="primary", use_container_width=True) and code_in:
-            k = code_in.strip()
-            ss["sym"] = JMAP.get(k, normalize_jp(k))
-            st.rerun()
+            with st.spinner("銘柄を確認しています…"):
+                resolved = resolve_symbol(code_in)
+            if resolved:
+                ss["sym"] = resolved
+                st.rerun()
+            else:
+                st.error(f"「{code_in.strip()}」に該当する銘柄が見つかりませんでした。"
+                         "銘柄名または証券コード（例: 7203, トヨタ, AAPL）を確認してください。")
 
     sym = ss.get("sym")
     if not sym:
@@ -1473,6 +1551,11 @@ def page_detail() -> None:
         return
 
     info = get_info(sym)
+    # 実在しない銘柄（情報も価格も取得できない）は表示しない
+    if not (info and (info.get("longName") or info.get("shortName"))) and get_price(sym) is None:
+        st.warning(f"「{sym}」の銘柄情報を取得できませんでした。上の入力欄から検索し直してください。")
+        ss.pop("sym", None)
+        return
     name = CODE2NAME.get(sym) or info.get("longName") or info.get("shortName") or sym
     cu = cur_of(sym)
     price = get_price(sym)
@@ -1946,7 +2029,7 @@ def page_favorites() -> None:
     st.download_button(
         "📥 CSVで保存",
         data=csv.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"お気に入り銘柄_{dt.datetime.now():%Y%m%d}.csv",
+        file_name=f"お気に入り銘柄_{now_jst():%Y%m%d}.csv",
         mime="text/csv"
     )
     
@@ -2289,6 +2372,9 @@ def render_auth() -> None:
                     st.error("このIDは既に使われています。別のIDを入力してください。")
 
         st.caption("※ 学習用アプリのためパスワードは平文で保存されます。普段使っているパスワードは入力しないでください。")
+        if not DB_URL:
+            st.caption("※ 外部データベース（DATABASE_URL）が未設定です。この状態ではサーバー再起動時に"
+                       "アカウントが消えることがあります。設定方法は README を参照してください。")
 
 
 def _on_global_search() -> None:
@@ -2318,8 +2404,8 @@ def main() -> None:
         st.write("") # 占位，保持左侧清爽
     
     with c_mid:
-        now = dt.datetime.now()
-        market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 0) and now.weekday() < 5
+        now = now_jst()
+        market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 30) and now.weekday() < 5
         status_text = "市場は開いています" if market_open else "市場は閉じています"
         st.markdown(
             f'<div class="topbar-time" style="display:inline-flex; margin:0 auto;">'
