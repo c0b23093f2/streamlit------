@@ -106,6 +106,8 @@ CSS = """
     --table-header: #f7f9fd;
     --news-thumb: #dbe6fb;
     --widget-light-bg: #f7f9fd;
+    --tint-bg: #f8faff;
+    --tint-border: #eef2f6;
 }
 
 /* ===== ダークモード（Chrome/OS が暗い場合に自動適用） ===== */
@@ -121,6 +123,8 @@ CSS = """
         --table-header: #262730;
         --news-thumb: #1f2128;
         --widget-light-bg: #262730;
+        --tint-bg: #262730;
+        --tint-border: #3e4049;
     }
 }
 
@@ -1547,22 +1551,22 @@ def render_technical(sym: str, name: str, cu: str) -> None:
     price = float(df["Close"].iloc[-1])
     
     st.markdown(f"""
-    <div style="background:#f8faff;border-radius:16px;padding:24px;border:1px solid #eef2f6;margin-bottom:12px;">
+    <div style="background:var(--tint-bg);border-radius:16px;padding:24px;border:1px solid var(--tint-border);margin-bottom:12px;color:var(--text-main);">
         <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
             <div>
-                <div style="font-size:0.7rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">{name}</div>
-                <div style="font-size:1.8rem;font-weight:700;color:#1a2634;">{cu}{price:,.0f}</div>
+                <div style="font-size:0.7rem;color:var(--text-sub);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">{name}</div>
+                <div style="font-size:1.8rem;font-weight:700;color:var(--text-main);">{cu}{price:,.0f}</div>
             </div>
             <div style="flex:1;min-width:120px;">
-                <div style="font-size:1.8rem;letter-spacing:2px;">{t['stars']}</div>
+                <div style="font-size:1.8rem;letter-spacing:2px;color:var(--text-main);">{t['stars']}</div>
                 <span style="display:inline-block;padding:4px 18px;border-radius:30px;background-color:{t['color']};color:white;font-weight:bold;font-size:0.9rem;">
                     {t['emoji']} {t['judgment']}
                 </span>
             </div>
             <div style="display:flex;gap:28px;flex-wrap:wrap;">
-                <div><div style="font-size:0.6rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">RSI</div><div style="font-size:1.1rem;font-weight:700;color:#1a2634;">{t['rsi']:.1f}</div></div>
-                <div><div style="font-size:0.6rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">MACD</div><div style="font-size:1.1rem;font-weight:700;color:#1a2634;">{t['macd']:+.2f}</div></div>
-                <div><div style="font-size:0.6rem;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">MA25</div><div style="font-size:1.1rem;font-weight:700;color:#1a2634;">{cu}{t['sma25']:,.0f}</div></div>
+                <div><div style="font-size:0.6rem;color:var(--text-sub);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">RSI</div><div style="font-size:1.1rem;font-weight:700;color:var(--text-main);">{t['rsi']:.1f}</div></div>
+                <div><div style="font-size:0.6rem;color:var(--text-sub);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">MACD</div><div style="font-size:1.1rem;font-weight:700;color:var(--text-main);">{t['macd']:+.2f}</div></div>
+                <div><div style="font-size:0.6rem;color:var(--text-sub);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">MA25</div><div style="font-size:1.1rem;font-weight:700;color:var(--text-main);">{cu}{t['sma25']:,.0f}</div></div>
             </div>
         </div>
     </div>
@@ -1995,9 +1999,9 @@ def page_trade() -> None:
         
         if ticker and price:
             st.markdown(f"""
-            <div style="background:#f8faff;border-radius:14px;padding:14px 18px;margin-bottom:12px;border:1px solid #eef2f6;">
-                <div style="font-weight:600;font-size:0.85rem;color:#4a5a6e;">{label_of(ticker)}</div>
-                <div style="font-size:1.5rem;font-weight:700;color:#1a2634;">¥{price:,.1f}</div>
+            <div style="background:var(--tint-bg);border-radius:14px;padding:14px 18px;margin-bottom:12px;border:1px solid var(--tint-border);">
+                <div style="font-weight:600;font-size:0.85rem;color:var(--text-sub);">{label_of(ticker)}</div>
+                <div style="font-size:1.5rem;font-weight:700;color:var(--text-main);">¥{price:,.1f}</div>
             </div>
             """, unsafe_allow_html=True)
             
