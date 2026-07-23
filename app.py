@@ -41,6 +41,13 @@ INITIAL_CASH = 1_000_000
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "favorites.db"
 
+# 日本時間（JST）: 公開サーバーはUTCで動くため、時刻表示・市場判定は必ずJSTで行う
+JST = dt.timezone(dt.timedelta(hours=9), name="JST")
+
+
+def now_jst() -> dt.datetime:
+    return dt.datetime.now(JST)
+
 # 日本語名 → ティッカー
 JMAP = {
     "トヨタ": "7203.T", "トヨタ自動車": "7203.T",
@@ -839,7 +846,7 @@ def fav_codes() -> set[str]:
 
 
 def fav_add(code: str, name: str) -> None:
-    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
+    now = now_jst().strftime("%Y/%m/%d %H:%M")
     try:
         with _db() as conn:
             conn.execute(
@@ -937,7 +944,7 @@ def execute_trade(ticker: str, side: str, shares: int, price: float) -> tuple[bo
             pos.cost_basis = 0.0
     ss.positions[ticker] = pos
     ss.trades.append({
-        "日時": dt.datetime.now().strftime("%m-%d %H:%M:%S"),
+        "日時": now_jst().strftime("%m-%d %H:%M:%S"),
         "銘柄": label_of(ticker),
         "売買": side,
         "株数": shares,
@@ -1843,7 +1850,7 @@ def page_favorites() -> None:
     st.download_button(
         "📥 CSVで保存",
         data=csv.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"お気に入り銘柄_{dt.datetime.now():%Y%m%d}.csv",
+        file_name=f"お気に入り銘柄_{now_jst():%Y%m%d}.csv",
         mime="text/csv"
     )
     
@@ -2041,7 +2048,7 @@ def _auto_signal(rule: dict) -> tuple[str, str]:
 
 def _auto_log(rule: dict, action: str, detail: str) -> None:
     st.session_state["auto_log"].insert(0, {
-        "日時": dt.datetime.now().strftime("%m-%d %H:%M:%S"),
+        "日時": now_jst().strftime("%m-%d %H:%M:%S"),
         "銘柄": label_of(rule["ticker"]),
         "戦略": rule["strategy"],
         "アクション": action,
@@ -2069,7 +2076,7 @@ def run_auto_rules(force: bool = False) -> list[str]:
             continue
         sig, detail = _auto_signal(rule)
         rule["last_detail"] = detail
-        rule["last_checked"] = dt.datetime.now().strftime("%H:%M:%S")
+        rule["last_checked"] = now_jst().strftime("%H:%M:%S")
         prev_sig = rule.get("last_signal", "hold")
         rule["last_signal"] = sig
         # シグナルが「変化した瞬間」のみ発注（毎回の再実行での連続発注を防ぐ）
@@ -3048,7 +3055,7 @@ def main() -> None:
         st.write("")  # 左側の余白
     
     with c_mid:
-        now = dt.datetime.now()
+        now = now_jst()
         market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 0) and now.weekday() < 5
         status_text = "市場は開いています" if market_open else "市場は閉じています"
         st.markdown(
