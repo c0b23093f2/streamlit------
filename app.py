@@ -153,8 +153,13 @@ header[data-testid="stHeader"] {
     padding: 0px !important;
     pointer-events: none;      /* もや領域のクリックを下のUIへ通す */
 }
-header[data-testid="stHeader"] > * {
-    pointer-events: auto;      /* 右上のメニュー・ツールバー自体は操作可能のまま */
+header[data-testid="stHeader"] * {
+    pointer-events: none !important;   /* 全幅ツールバー等の透明な層もクリックを奪わない */
+}
+header[data-testid="stHeader"] button,
+header[data-testid="stHeader"] a,
+header[data-testid="stHeader"] [role="button"] {
+    pointer-events: auto !important;   /* 実際のボタン・リンクだけ操作可能に戻す */
 }
 div[data-testid="stDecoration"] { display: none; }  /* 上端のグラデーションバーを非表示 */
 
