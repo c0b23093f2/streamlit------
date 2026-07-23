@@ -3058,9 +3058,14 @@ def main() -> None:
         now = now_jst()
         market_open = dt.time(9, 0) <= now.time() <= dt.time(15, 0) and now.weekday() < 5
         status_text = "市場は開いています" if market_open else "市場は閉じています"
+        # 開場中は緑、閉場中は赤のステータスドット
+        dot_color = "var(--up)" if market_open else "var(--down)"
+        dot_glow = "rgba(22,199,132,0.15)" if market_open else "rgba(234,57,67,0.15)"
         st.markdown(
             f'<div class="topbar-time" style="display:inline-flex; margin:0 auto;">'
-            f'<span class="dot"></span>{now:%Y/%m/%d %H:%M} 時点　・　{status_text}</div>',
+            f'<span class="dot" style="background:{dot_color};'
+            f'box-shadow:0 0 0 3px {dot_glow};"></span>'
+            f'{now:%Y/%m/%d %H:%M} 時点　・　{status_text}</div>',
             unsafe_allow_html=True,
         )
 
