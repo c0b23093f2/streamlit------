@@ -142,13 +142,21 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 #MainMenu, footer { visibility: hidden; }
 
+/* Streamlit標準ヘッダー: ぼかしを無効化し、クリックを下の要素へ通す
+   （公開サーバーで白いもやのバーが上部の操作を妨げる問題への対策） */
 header[data-testid="stHeader"] {
     background: transparent !important;
-    backdrop-filter: blur(10px);
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
     box-shadow: none;
     height: 0px !important;
     padding: 0px !important;
+    pointer-events: none;      /* もや領域のクリックを下のUIへ通す */
 }
+header[data-testid="stHeader"] > * {
+    pointer-events: auto;      /* 右上のメニュー・ツールバー自体は操作可能のまま */
+}
+div[data-testid="stDecoration"] { display: none; }  /* 上端のグラデーションバーを非表示 */
 
 /* =========================== サイドバー =========================== */
 section[data-testid="stSidebar"] {
