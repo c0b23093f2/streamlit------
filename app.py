@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,11 +114,11 @@ CSS = """
 /* ===== ダークモード（Chrome/OS が暗い場合に自動適用） ===== */
 @media (prefers-color-scheme: dark) {
     :root {
-        --bg: #0e1117;          /* Streamlit 默认深色背景 */
-        --card: #262730;        /* 深色卡片背景 */
-        --border: #3e4049;      /* 深色边框 */
-        --text-main: #f0f2f6;   /* 浅色主字体 */
-        --text-sub: #a3a8b8;    /* 浅色副字体 */
+        --bg: #0e1117;          /* Streamlit 標準のダーク背景 */
+        --card: #262730;        /* ダークモードのカード背景 */
+        --border: #3e4049;      /* ダークモードの枠線 */
+        --text-main: #f0f2f6;   /* 明るいメイン文字色 */
+        --text-sub: #a3a8b8;    /* 明るいサブ文字色 */
         --tag-bg: rgba(79, 125, 243, 0.15);
         --tag-border: #3e4049;
         --table-header: #262730;
@@ -128,7 +129,7 @@ CSS = """
     }
 }
 
-/* ===== 全局背景 ===== */
+/* ===== 全体背景 ===== */
 html, body, [data-testid="stAppViewContainer"] {
     background: var(--bg) !important;
     color: var(--text-main) !important;
@@ -947,7 +948,7 @@ def open_detail(code: str) -> None:
 def _rank_panel(title: str, df_sorted: pd.DataFrame, key: str) -> None:
     """値上がり率/値下がり率ランキングを表示（行選択で自動遷移）"""
     with st.container(border=True):
-        # 保持视觉标题，但不再作为跳转链接
+        # パネルタイトル（見出しとして表示）
         st.markdown(
             f'<div class="panel-head"><span class="ph-title">{title}</span>'
             f'<span class="ph-more">選択してクリックで詳細へ ›</span></div>',
@@ -955,13 +956,13 @@ def _rank_panel(title: str, df_sorted: pd.DataFrame, key: str) -> None:
         )
         df_show = df_sorted.head(5).reset_index(drop=True)
         
-        # 使用 st.dataframe 并监听 selection
+        # st.dataframe の行選択イベントを利用
         event = st.dataframe(
             df_show[["銘柄名", "yahoo_code", "現在値", "前日比率"]],
             use_container_width=True,
             hide_index=True,
-            on_select="rerun",          # 选中后自动刷新
-            selection_mode="single-row", # 只允许选择单行
+            on_select="rerun",          # 選択で自動リラン
+            selection_mode="single-row", # 単一行のみ選択可
             key=key,
             column_config={
                 "銘柄名": st.column_config.TextColumn("銘柄名"),
@@ -971,16 +972,16 @@ def _rank_panel(title: str, df_sorted: pd.DataFrame, key: str) -> None:
             },
         )
         
-        # 监听选择变化，如果有选中的行，立即跳转
+        # 行が選択されたら銘柄詳細へ遷移
         try:
             rows = list(event.selection.rows)
         except Exception:
             rows = []
             
         if rows:
-            # 在跳转前清空选定状态，防止后续返回时重复跳转
+            # 戻ったときに再遷移しないよう選択状態をクリア
             st.session_state.pop(key, None)
-            # 获取选定行的股票代码并跳转
+            # 選択行の銘柄コードを取得して遷移
             code = str(df_show.iloc[rows[0]]["yahoo_code"])
             open_detail(code)
 def page_home() -> None:
@@ -993,7 +994,7 @@ def page_home() -> None:
     # ---------------------------------------------------------------
     col1, col2, col3 = st.columns([4, 1, 1])
     
-    # 将输入框放在 col1
+    # 検索入力欄
     kw = col1.text_input(
         "検索キーワード",
         placeholder="例: 7203, トヨタ, 9984.T, 日経平均",
@@ -1001,11 +1002,11 @@ def page_home() -> None:
         key="skw"
     )
     
-    # 这里加入一个新功能：如果搜索到了多个结果，显示下拉选择框
-    if kw and len(kw) >= 2: # 字数超过2个才开始搜索，避免卡顿
+    # 検索結果が複数ある場合は候補の選択ボックスを表示
+    if kw and len(kw) >= 2:  # 2文字以上で検索開始（負荷軽減）
         res = search_stock(kw)
         if len(res) > 1:
-            # 构建下拉选项： "トヨタ自動車 (7203.T)" 这样的格式
+            # 「トヨタ自動車 (7203.T)」形式の候補リストを作成
             options = {f"{r['name']} ({r['code']})": r['code'] for r in res}
             selected_label = col2.selectbox(
                 "候補から選択",
@@ -1020,7 +1021,7 @@ def page_home() -> None:
                     st.session_state["_sr"] = selected_code
                     st.rerun()
         elif len(res) == 1:
-            # 如果精准匹配只有 1 个，直接填入 col1 的输入框，并提供一个快速前往按钮
+            # 候補が1件だけの場合は銘柄名を表示し、すぐ移動できるボタンを出す
             col2.caption(f"✅ {res[0]['name']}")
             if col3.button("前往", type="primary", use_container_width=True):
                 st.session_state["_sr"] = res[0]['code']
@@ -1028,10 +1029,10 @@ def page_home() -> None:
         else:
             col2.caption("")
 
-    # 处理跳转（注意这里依然兼容原来的按钮逻辑）
+    # 検索ボタン（従来の検索動作）
     go = col3.button("🔍 検索", key="search_btn", use_container_width=True)
 
-    # 如果有搜索历史点击或者指定跳转
+    # 検索履歴クリックやトップバー検索からの引き継ぎ
     sr = ss.pop("_sr", "")
     if sr:
         kw, go = sr, True
@@ -1096,7 +1097,7 @@ def page_home() -> None:
             '<div class="hero-card">'
             '<div class="hero-top"><span>💼 資産サマリー（デモ口座）</span></div>'
             f'<div class="hero-value">{yen(total)}</div>'
-            f'<div class="hero-sub">前日比 {arrow} {yen(abs(pnl))}（{pct:+.2f}%）</div>'
+            f'<div class="hero-sub">累計損益 {arrow} {yen(abs(pnl))}（{pct:+.2f}%）</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1295,7 +1296,7 @@ def page_detail() -> None:
     with st.container():
         c1, c2 = st.columns([4, 1])
         
-        # 输入框提示
+        # 銘柄入力欄
         code_in = c1.text_input(
             "証券コード・銘柄名",
             placeholder="例: 7203.T, トヨタ, 9984.T, ^N225",
@@ -1308,17 +1309,17 @@ def page_detail() -> None:
             k = code_in.strip()
             target_code = None
             
-            # 1. 检查是否为字典里已知的日语名称
+            # 1. 日本語名の辞書に載っているか確認
             if k in JMAP:
                 target_code = JMAP[k]
-            # 2. 检查是否为4位纯数字
+            # 2. 4桁の数字なら日本株コードとして扱う
             elif k.isdigit() and len(k) == 4:
-                target_code = f"{k}.T" # 自动补全后缀
-            # 3. 检查是否为有效的后缀代码
+                target_code = f"{k}.T"  # .T を自動補完
+            # 3. .T付きコード・指数コードはそのまま利用
             elif k.upper().endswith(".T") or k.startswith("^"):
                 target_code = k.upper()
                 
-            # 4. 如果生成了候选代码，验证数据是否存在
+            # 4. 候補コードのデータが実在するか検証
             if target_code:
                 @st.cache_data(ttl=10, show_spinner=False)
                 def validate_price(code):
@@ -1333,27 +1334,24 @@ def page_detail() -> None:
                     ss["sym"] = target_code
                     st.rerun()
                 else:
-                    # 数据不存在（比如输入了 0000）
+                    # データが存在しない場合（例: 0000）
                     st.error(f"❌ 入力エラー：'{k}' はデータを取得できない、または存在しない銘柄です。")
                     ss["sym"] = None
             else:
-                # ==========================================
-                # 【核心修改】：当用户输入了字典以外的文字时，使用更温和的提示
-                # ==========================================
+                # 辞書にない入力にはコード入力を促す案内を表示
                 st.info(f"💡 「{k}」は現在の辞書に登録されていません。確実に検索するには、**4桁の証券コード**（例：7203.T）をご利用ください。")
                 ss["sym"] = None
 
     sym = ss.get("sym")
     if not sym:
-        # 这里的默认提示也改成更积极引导使用代码
+        # 未選択時はコード入力を案内
         st.info("💡 **4桁の証券コード**（例: 7203.T）を入力して「表示」をクリックすると、すべての銘柄を検索できます。")
         return
 
-    # =================【核心修复区】=================
+    # ---- 銘柄名の解決 ----
     info = get_info(sym)
     
-    # 【修复逻辑】永远优先使用 yfinance 官方返回的全名！
-    # 只有当 info 拿不到名字时，才去查简单的字典 CODE2NAME
+    # yfinance公式の銘柄名を優先し、取得できない場合のみ辞書（CODE2NAME）を参照
     if info and (info.get("longName") or info.get("shortName")):
         name = info.get("longName") or info.get("shortName") or sym
     else:
@@ -1371,7 +1369,6 @@ def page_detail() -> None:
     with h2:
         fav_toggle_button(sym, name, key=f"fv_detail_{sym}")
         
-    # ... 下面保持原样不变 ...
     # 価格と前日比
     hist5 = get_history(sym, "5d", "1d")
     chg = pct = None
@@ -1476,7 +1473,7 @@ def render_chart(sym: str) -> None:
     row_h = [heights[r] for r in rows]
     s = sum(row_h)
     fig = make_subplots(
-        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.08,  # 把 0.03 改为 0.08 或 0.1
+        rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.08,  # サブパネル間の余白
         row_heights=[h / s for h in row_h],
         subplot_titles=[("" if r == "price" else r) for r in rows]
     )
@@ -1850,9 +1847,10 @@ def page_favorites() -> None:
 # ページ: 指標解説
 # ===========================================================================
 GLOSSARY = pd.DataFrame({
-    "分類": ["ファンダメンタル"] * 7 + ["テクニカル"] * 7,
+    "分類": ["ファンダメンタル"] * 7 + ["テクニカル"] * 18,
     "指標": ["PER", "PBR", "ROE", "EPS", "BPS", "配当利回り", "時価総額",
-             "移動平均線", "RSI", "MACD", "ボリンジャーバンド", "出来高", "ゴールデンクロス", "デッドクロス"],
+             "移動平均線", "RSI", "MACD", "ボリンジャーバンド", "出来高", "ゴールデンクロス", "デッドクロス",
+             "KDJ", "AR", "VR", "OSC", "移動平均乖離率", "W%R", "CCI", "DMI/ADX", "PSY", "モメンタム", "一目均衡表"],
     "意味": [
         "株価が1株当たり利益(EPS)の何倍かを示す指標",
         "株価が1株当たり純資産(BPS)の何倍かを示す指標",
@@ -1868,6 +1866,17 @@ GLOSSARY = pd.DataFrame({
         "売買された株数",
         "短期移動平均線が長期移動平均線を上抜け",
         "短期移動平均線が長期移動平均線を下抜け",
+        "ストキャスティクスを応用した短期売買指標（K・D・Jの3線）",
+        "一定期間の値動きから買い人気の強さを測る指標",
+        "上昇日と下落日の出来高の比率",
+        "終値と移動平均線の差で相場の勢いを見る指標",
+        "株価が移動平均線からどれだけ離れているかの割合",
+        "期間中の高値・安値に対する終値の位置（ウィリアムズ%R）",
+        "平均的な価格からの偏差で過熱感を測る指標",
+        "トレンドの方向（+DI/-DI）と強さ（ADX）を測る指標",
+        "一定期間のうち上昇した日の割合（投資家心理）",
+        "現在値とN日前の価格差で上昇・下落の勢いを測る指標",
+        "転換線・基準線・雲などで相場を総合的に見る日本発の指標",
     ],
     "見方": [
         "15倍前後が一般的。低いほど割安とされる。",
@@ -1884,6 +1893,17 @@ GLOSSARY = pd.DataFrame({
         "増加すると注目度が高いことを示す。",
         "買いシグナルとして利用される。",
         "売りシグナルとして利用される。",
+        "KがDを上抜けたら買い。Jが0以下で売られすぎ、100以上で買われすぎ。",
+        "150以上は過熱、70以下は人気離散で反発が近いとされる。",
+        "70%以下は底値圏、300%以上は買われすぎの目安。",
+        "0より上なら上昇圧力、下なら下落圧力。差の拡大・縮小で勢いを判断。",
+        "±5%を超えると行き過ぎで、反動（逆方向の動き）が出やすい。",
+        "-20より上は買われすぎ、-80より下は売られすぎ。",
+        "+100超は買われすぎ、-100未満は売られすぎの目安。",
+        "ADXが25以上でトレンド発生。+DIが-DIより上なら上昇トレンド。",
+        "75%以上は強気過剰（反落注意）、25%以下は弱気過剰（反発期待）。",
+        "0より上で上昇の勢い、0より下で下落の勢いを示す。",
+        "株価が雲の上なら強気、雲の下なら弱気、雲の中はもみ合い。",
     ],
 })
 
@@ -1909,43 +1929,733 @@ def page_glossary() -> None:
 
 
 # ===========================================================================
+# 自動売買（デモ）
+# ===========================================================================
+AUTO_STRATEGIES = [
+    "ゴールデンクロス（SMA5/25）",
+    "RSI逆張り（30/70）",
+    "総合シグナル（テクニカル判定）",
+    "総合診断（全指標スコア）",
+    "指値・逆指値",
+]
+
+SIG_LABEL = {"buy": "🟢 買いシグナル", "sell": "🔴 売りシグナル", "hold": "⚪ 待機中"}
+
+
+def init_auto_state() -> None:
+    ss = st.session_state
+    ss.setdefault("auto_rules", [])
+    ss.setdefault("auto_log", [])
+    ss.setdefault("auto_rule_seq", 1)
+    ss.setdefault("auto_group_seq", 1)
+
+
+def resolve_trade_symbol(kw: str) -> str:
+    """『7203』『トヨタ』『AAPL』などをティッカーに解決する"""
+    k = (kw or "").strip()
+    if not k:
+        return ""
+    if k in JMAP:
+        return JMAP[k]
+    for name, code in JMAP.items():
+        if k in name:
+            return code
+    return normalize_jp(k)
+
+
+def _auto_signal(rule: dict) -> tuple[str, str]:
+    """ルールを評価して ('buy' | 'sell' | 'hold', 説明) を返す"""
+    tk = rule["ticker"]
+    price = get_price(tk)
+    if price is None:
+        return "hold", "価格取得不可"
+
+    strat = rule["strategy"]
+    if strat == "指値・逆指値":
+        if rule.get("buy_below") and price <= rule["buy_below"]:
+            return "buy", f"現在値 {price:,.1f} ≤ 指値 {rule['buy_below']:,.1f}"
+        if rule.get("sell_above") and price >= rule["sell_above"]:
+            return "sell", f"現在値 {price:,.1f} ≥ 逆指値 {rule['sell_above']:,.1f}"
+        return "hold", f"現在値 {price:,.1f}（条件未達）"
+
+    df = get_history(tk, "6mo", "1d")
+    if len(df) < 30:
+        return "hold", "データ不足"
+    df = add_indicators(df)
+
+    if strat == "ゴールデンクロス（SMA5/25）":
+        s5, s25 = df["SMA5"], df["SMA25"]
+        if s5.dropna().empty or len(s5) < 2:
+            return "hold", "データ不足"
+        now_up = s5.iloc[-1] > s25.iloc[-1]
+        prev_up = s5.iloc[-2] > s25.iloc[-2]
+        if now_up and not prev_up:
+            return "buy", "SMA5がSMA25を上抜け（ゴールデンクロス）"
+        if not now_up and prev_up:
+            return "sell", "SMA5がSMA25を下抜け（デッドクロス）"
+        return "hold", "クロス発生なし"
+
+    if strat == "RSI逆張り（30/70）":
+        rsi = float(df["RSI"].iloc[-1])
+        if rsi < 30:
+            return "buy", f"RSI {rsi:.1f} < 30（売られすぎ）"
+        if rsi > 70:
+            return "sell", f"RSI {rsi:.1f} > 70（買われすぎ）"
+        return "hold", f"RSI {rsi:.1f}（中立）"
+
+    if strat == "総合診断（全指標スコア）":
+        diags = _diagnose_indicators(add_extra_indicators(df))
+        if not diags:
+            return "hold", "データ不足"
+        v = _overall_verdict(diags)
+        base = f"買い{v['buy_n']}・売り{v['sell_n']}（スコア {v['score']:+d}・{v['label']}）"
+        # 買いが全体的に優勢なら買い、売り指標が増えてきたら早めに売り
+        if v["score"] >= 3:
+            return "buy", "買い指標が優勢: " + base
+        if v["score"] <= -2:
+            return "sell", "売り指標が増加: " + base
+        return "hold", base
+
+    # 総合シグナル（テクニカル判定）
+    t = technical_judgment(df)
+    score = sum(t["checks"].values())
+    if score >= 2:
+        return "buy", f"買いシグナル {score}/3（{t['judgment']}）"
+    if score == 0:
+        return "sell", f"買いシグナル 0/3（{t['judgment']}）"
+    return "hold", f"買いシグナル {score}/3（様子見）"
+
+
+def _auto_log(rule: dict, action: str, detail: str) -> None:
+    st.session_state["auto_log"].insert(0, {
+        "日時": dt.datetime.now().strftime("%m-%d %H:%M:%S"),
+        "銘柄": label_of(rule["ticker"]),
+        "戦略": rule["strategy"],
+        "アクション": action,
+        "内容": detail,
+    })
+    st.session_state["auto_log"] = st.session_state["auto_log"][:100]
+
+
+def run_auto_rules(force: bool = False) -> list[str]:
+    """有効な全ルールを評価し、シグナルが変化した瞬間だけ自動発注する。
+
+    毎回の画面更新で全ルールを再計算すると重いため、評価は60秒間隔に制限する
+    （「今すぐ判定」ボタンやルール追加直後は即時評価）。
+    """
+    init_trade_state()
+    init_auto_state()
+    ss = st.session_state
+    now_ts = time.time()
+    if not force and now_ts - ss.get("auto_last_eval", 0.0) < 60:
+        return []
+    ss["auto_last_eval"] = now_ts
+    executed: list[str] = []
+    for rule in ss["auto_rules"]:
+        if not rule.get("enabled", True):
+            continue
+        sig, detail = _auto_signal(rule)
+        rule["last_detail"] = detail
+        rule["last_checked"] = dt.datetime.now().strftime("%H:%M:%S")
+        prev_sig = rule.get("last_signal", "hold")
+        rule["last_signal"] = sig
+        # シグナルが「変化した瞬間」のみ発注（毎回の再実行での連続発注を防ぐ）
+        if sig == "hold" or sig == prev_sig:
+            continue
+        tk = rule["ticker"]
+        price = get_price(tk)
+        if price is None:
+            continue
+        if sig == "buy":
+            ok, msg = execute_trade(tk, "買い", int(rule["shares"]), price)
+        else:
+            pos = ss.positions.get(tk)
+            hold_shares = pos.shares if pos else 0
+            if hold_shares <= 0:
+                _auto_log(rule, "スキップ", f"{detail} → 保有なしのため売却せず")
+                continue
+            ok, msg = execute_trade(tk, "売り", int(min(rule["shares"], hold_shares)), price)
+        if ok:
+            ss.trades[-1]["売買"] += "🤖"
+            _auto_log(rule, "買い" if sig == "buy" else "売り", f"{detail} → {msg}")
+            executed.append(msg)
+        else:
+            _auto_log(rule, "失敗", f"{detail} → {msg}")
+    return executed
+
+
+# ===========================================================================
 # ページ: デモトレード
 # ===========================================================================
-def page_trade() -> None:
-    init_trade_state()
-    ss = st.session_state
-    
-    st.markdown(
-        '<div class="gradient-header">'
-        '<h2>💼 デモトレード</h2>'
-        '<p>yfinance の実データを使った日本株ペーパートレード（仮想資金100万円）</p>'
-        '</div>',
-        unsafe_allow_html=True,
+def _stat_strip_html(ticker: str, price: float) -> str:
+    """moomoo風の価格スタッツ帯（前日終値・始値・高値・安値・出来高・52週レンジ）"""
+    cu = cur_of(ticker)
+    d5 = get_history(ticker, "5d", "1d")
+    info = get_info(ticker)
+
+    def _f(v, fmt="{:,.1f}"):
+        return fmt.format(v) if isinstance(v, (int, float)) and pd.notna(v) else "—"
+
+    prev = float(d5["Close"].iloc[-2]) if len(d5) >= 2 else None
+    o = float(d5["Open"].iloc[-1]) if len(d5) else None
+    hi = float(d5["High"].iloc[-1]) if len(d5) else None
+    lo = float(d5["Low"].iloc[-1]) if len(d5) else None
+    vol = float(d5["Volume"].iloc[-1]) if len(d5) and "Volume" in d5.columns else None
+    hi52, lo52 = info.get("fiftyTwoWeekHigh"), info.get("fiftyTwoWeekLow")
+
+    items = [
+        ("前日終値", f"{cu}{_f(prev)}", "var(--text-main)"),
+        ("始値", f"{cu}{_f(o)}", "var(--text-main)"),
+        ("高値", f"{cu}{_f(hi)}", UP),
+        ("安値", f"{cu}{_f(lo)}", DOWN),
+        ("出来高", _f(vol, "{:,.0f}"), "var(--text-main)"),
+        ("52週高値", f"{cu}{_f(hi52)}", "var(--text-main)"),
+        ("52週安値", f"{cu}{_f(lo52)}", "var(--text-main)"),
+    ]
+    cells = "".join(
+        f'<div style="min-width:86px;">'
+        f'<div style="font-size:0.62rem;color:var(--text-sub);font-weight:700;">{label}</div>'
+        f'<div style="font-size:0.85rem;font-weight:800;color:{color};">{value}</div></div>'
+        for label, value, color in items
+    )
+    return (
+        f'<div style="display:flex;flex-wrap:wrap;gap:14px 18px;padding:10px 14px;'
+        f'background:var(--tint-bg);border:1px solid var(--tint-border);border-radius:12px;'
+        f'margin-bottom:8px;">{cells}</div>'
     )
 
-    # サマリー
-    holdings_value = 0.0
-    for tk, pos in ss.positions.items():
-        if pos.shares:
-            p = get_price(tk)
-            if p:
-                holdings_value += pos.shares * p
-    total = ss.cash + holdings_value
-    pnl = total - INITIAL_CASH
-    pct = pnl / INITIAL_CASH * 100
-    cls = "up" if pnl > 0 else ("down" if pnl < 0 else "muted")
-    arrow = "▲" if pnl > 0 else ("▼" if pnl < 0 else "—")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.markdown(card_html("総資産", yen(total), f"{arrow} {yen(abs(pnl))}（{pct:+.2f}%）", cls), unsafe_allow_html=True)
-    col2.markdown(card_html("現金残高", yen(ss.cash)), unsafe_allow_html=True)
-    col3.markdown(card_html("株式評価額", yen(holdings_value)), unsafe_allow_html=True)
-    col4.markdown(card_html("累計損益", f"{pnl:+,.0f}", f"{pct:+.2f}%", cls), unsafe_allow_html=True)
+
+def add_extra_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """KDJ / AR / VR / OSC を追加計算する（add_indicators 適用後の df を渡す）"""
+    out = df.copy()
+    # --- KDJ（9,3,3）: ストキャスティクスの派生。K/DのクロスとJの行き過ぎを見る ---
+    low9 = out["Low"].rolling(9).min()
+    high9 = out["High"].rolling(9).max()
+    rng = (high9 - low9).replace(0, float("nan"))
+    rsv = (out["Close"] - low9) / rng * 100
+    out["K"] = rsv.ewm(com=2, adjust=False).mean()
+    out["D"] = out["K"].ewm(com=2, adjust=False).mean()
+    out["J"] = 3 * out["K"] - 2 * out["D"]
+    # --- AR（26日）: 人気指標。(高値-始値)の合計 ÷ (始値-安値)の合計 ×100 ---
+    n = 26
+    ar_den = (out["Open"] - out["Low"]).rolling(n).sum().replace(0, float("nan"))
+    out["AR"] = (out["High"] - out["Open"]).rolling(n).sum() / ar_den * 100
+    # --- VR（26日）: 出来高比率。上昇日の出来高 ÷ 下落日の出来高 ×100 ---
+    chg = out["Close"].diff()
+    vol = out["Volume"].astype(float)
+    up_v = vol.where(chg > 0, 0.0).rolling(n).sum()
+    dn_v = vol.where(chg < 0, 0.0).rolling(n).sum()
+    fl_v = vol.where(chg == 0, 0.0).rolling(n).sum()
+    vr_den = (dn_v + fl_v / 2).replace(0, float("nan"))
+    out["VR"] = (up_v + fl_v / 2) / vr_den * 100
+    # --- OSC（20日）: 終値と20日移動平均の差。0ラインとの位置と向きを見る ---
+    out["OSC"] = out["Close"] - out["Close"].rolling(20).mean()
+    # --- W%R（14日）: 期間高値・安値に対する終値の位置。-20より上は買われすぎ、-80より下は売られすぎ ---
+    h14 = out["High"].rolling(14).max()
+    l14 = out["Low"].rolling(14).min()
+    wr_rng = (h14 - l14).replace(0, float("nan"))
+    out["WR"] = (h14 - out["Close"]) / wr_rng * -100
+    # --- CCI（20日）: 平均価格からの偏差で過熱感を測る。±100が目安 ---
+    tp = (out["High"] + out["Low"] + out["Close"]) / 3
+    tp_ma = tp.rolling(20).mean()
+    md = (tp - tp_ma).abs().rolling(20).mean().replace(0, float("nan"))
+    out["CCI"] = (tp - tp_ma) / (0.015 * md)
+    # --- モメンタム（10日）: 現在値と10日前の価格差で勢いを見る ---
+    out["MOM"] = out["Close"] - out["Close"].shift(10)
+    # --- PSY（12日）: 直近12日のうち上昇日の割合（投資家心理） ---
+    up_day = (out["Close"].diff() > 0).astype(float)
+    out["PSY"] = up_day.rolling(12).mean() * 100
+    # --- DMI / ADX（14日）: トレンドの方向（+DI/-DI）と強さ（ADX） ---
+    up_move = out["High"].diff()
+    down_move = -out["Low"].diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    tr = pd.concat([
+        out["High"] - out["Low"],
+        (out["High"] - out["Close"].shift(1)).abs(),
+        (out["Low"] - out["Close"].shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().replace(0, float("nan"))
+    out["PDI"] = plus_dm.rolling(14).mean() / atr * 100
+    out["MDI"] = minus_dm.rolling(14).mean() / atr * 100
+    dx = (out["PDI"] - out["MDI"]).abs() / (out["PDI"] + out["MDI"]).replace(0, float("nan")) * 100
+    out["ADX"] = dx.rolling(14).mean()
+    # --- 一目均衡表（雲）: 先行スパン1・2で作る雲と株価の位置関係 ---
+    tenkan = (out["High"].rolling(9).max() + out["Low"].rolling(9).min()) / 2
+    kijun = (out["High"].rolling(26).max() + out["Low"].rolling(26).min()) / 2
+    out["TENKAN"], out["KIJUN"] = tenkan, kijun
+    out["SPAN_A"] = ((tenkan + kijun) / 2).shift(26)
+    out["SPAN_B"] = ((out["High"].rolling(52).max() + out["Low"].rolling(52).min()) / 2).shift(26)
+    return out
+
+
+def _diagnose_indicators(df: pd.DataFrame) -> list[dict]:
+    """moomoo風の指標診断（9指標）。各指標を 買い(buy)/中立(neutral)/売り(sell) で判定する"""
+    out: list[dict] = []
+    close = float(df["Close"].iloc[-1])
+    s5, s25, s75 = df["SMA5"].iloc[-1], df["SMA25"].iloc[-1], df["SMA75"].iloc[-1]
+
+    # 1. トレンド（移動平均線の並び）
+    if pd.notna(s75) and s5 > s25 > s75:
+        out.append({"name": "トレンド(MA)", "verdict": "buy", "label": "強い上昇",
+                    "detail": "SMA5 > SMA25 > SMA75 のパーフェクトオーダー。上昇トレンドが安定しています。"})
+    elif s5 > s25:
+        out.append({"name": "トレンド(MA)", "verdict": "buy", "label": "上昇",
+                    "detail": "短期線(SMA5)が中期線(SMA25)より上にあり、上昇基調です。"})
+    elif pd.notna(s75) and s5 < s25 < s75:
+        out.append({"name": "トレンド(MA)", "verdict": "sell", "label": "強い下降",
+                    "detail": "SMA5 < SMA25 < SMA75 の逆パーフェクトオーダー。下降トレンドです。"})
+    elif s5 < s25:
+        out.append({"name": "トレンド(MA)", "verdict": "sell", "label": "下降",
+                    "detail": "短期線が中期線を下回っており、下降基調です。"})
+    else:
+        out.append({"name": "トレンド(MA)", "verdict": "neutral", "label": "横ばい",
+                    "detail": "移動平均線が交錯しており、方向感がありません。"})
+
+    # 2. MACD
+    macd, sig = float(df["MACD"].iloc[-1]), float(df["Signal"].iloc[-1])
+    hist = float(df["Hist"].iloc[-1])
+    prev_hist = float(df["Hist"].iloc[-2]) if len(df) > 1 and pd.notna(df["Hist"].iloc[-2]) else hist
+    momentum = "・勢い拡大" if abs(hist) >= abs(prev_hist) else "・勢い縮小"
+    if macd > sig:
+        out.append({"name": "MACD", "verdict": "buy", "label": "GC中" + momentum,
+                    "detail": f"MACD({macd:+.2f})がシグナル({sig:+.2f})を上回っており、買い優勢です。"})
+    else:
+        out.append({"name": "MACD", "verdict": "sell", "label": "DC中" + momentum,
+                    "detail": f"MACD({macd:+.2f})がシグナル({sig:+.2f})を下回っており、売り優勢です。"})
+
+    # 3. RSI(14)
+    rsi = float(df["RSI"].iloc[-1])
+    if rsi < 30:
+        out.append({"name": "RSI(14)", "verdict": "buy", "label": f"{rsi:.1f} 売られすぎ",
+                    "detail": "RSIが30未満。売られすぎ水準で、反発が期待できる場面です。"})
+    elif rsi > 70:
+        out.append({"name": "RSI(14)", "verdict": "sell", "label": f"{rsi:.1f} 買われすぎ",
+                    "detail": "RSIが70超。過熱感があり、反落に注意が必要です。"})
+    else:
+        out.append({"name": "RSI(14)", "verdict": "neutral", "label": f"{rsi:.1f} 中立",
+                    "detail": "RSIは30〜70のレンジ内で、過熱感はありません。"})
+
+    # 4. KDJ（9,3,3）
+    k = df["K"].iloc[-1] if "K" in df.columns else float("nan")
+    d_ = df["D"].iloc[-1] if "D" in df.columns else float("nan")
+    j = df["J"].iloc[-1] if "J" in df.columns else float("nan")
+    if pd.notna(k) and pd.notna(d_) and pd.notna(j):
+        kdj_detail = f"K={k:.1f} / D={d_:.1f} / J={j:.1f}。"
+        if j < 0:
+            out.append({"name": "KDJ", "verdict": "buy", "label": f"J={j:.1f} 売られすぎ",
+                        "detail": kdj_detail + "Jが0を割り込み、短期的な売られすぎです。"})
+        elif j > 100:
+            out.append({"name": "KDJ", "verdict": "sell", "label": f"J={j:.1f} 買われすぎ",
+                        "detail": kdj_detail + "Jが100を超え、短期的な過熱状態です。"})
+        elif k > d_:
+            out.append({"name": "KDJ", "verdict": "buy", "label": "K＞D（GC中）",
+                        "detail": kdj_detail + "K線がD線の上にあり、短期的に買い優勢です。"})
+        elif k < d_:
+            out.append({"name": "KDJ", "verdict": "sell", "label": "K＜D（DC中）",
+                        "detail": kdj_detail + "K線がD線の下にあり、短期的に売り優勢です。"})
+        else:
+            out.append({"name": "KDJ", "verdict": "neutral", "label": "交錯",
+                        "detail": kdj_detail + "K線とD線が交錯しており、方向感がありません。"})
+
+    # 5. ボリンジャーバンド
+    bb_up, bb_low, bb_mid = df["BB_up"].iloc[-1], df["BB_low"].iloc[-1], df["BB_mid"].iloc[-1]
+    if pd.notna(bb_up) and close > bb_up:
+        out.append({"name": "ボリンジャー", "verdict": "sell", "label": "+2σ超え",
+                    "detail": "終値が+2σを上抜け。勢いは強いものの、短期的な過熱に注意です。"})
+    elif pd.notna(bb_low) and close < bb_low:
+        out.append({"name": "ボリンジャー", "verdict": "buy", "label": "-2σ割れ",
+                    "detail": "終値が-2σを下回り、売られすぎからの反発候補です。"})
+    else:
+        pos = "上寄り" if pd.notna(bb_mid) and close >= bb_mid else "下寄り"
+        out.append({"name": "ボリンジャー", "verdict": "neutral", "label": f"バンド内({pos})",
+                    "detail": "±2σのバンド内で推移しており、異常な値動きではありません。"})
+
+    # 6. 移動平均乖離率（25日）
+    if pd.notna(s25) and s25:
+        dev = (close - s25) / s25 * 100
+        if dev <= -5:
+            out.append({"name": "乖離率(25日)", "verdict": "buy", "label": f"{dev:+.1f}%",
+                        "detail": "25日線から下に大きく乖離しており、リバウンドの余地があります。"})
+        elif dev >= 5:
+            out.append({"name": "乖離率(25日)", "verdict": "sell", "label": f"{dev:+.1f}%",
+                        "detail": "25日線から上に大きく乖離しており、押し戻しに注意です。"})
+        else:
+            out.append({"name": "乖離率(25日)", "verdict": "neutral", "label": f"{dev:+.1f}%",
+                        "detail": "25日線との乖離は±5%以内で、標準的な範囲です。"})
+
+    # 7. OSC（20日オシレーター）
+    if "OSC" in df.columns and pd.notna(df["OSC"].iloc[-1]):
+        osc = float(df["OSC"].iloc[-1])
+        prev_osc = float(df["OSC"].iloc[-2]) if len(df) > 1 and pd.notna(df["OSC"].iloc[-2]) else osc
+        if osc > 0 and osc >= prev_osc:
+            out.append({"name": "OSC(20日)", "verdict": "buy", "label": f"{osc:+,.0f} 上昇圧力",
+                        "detail": "終値が20日線より上で、その差も拡大中。上昇圧力が続いています。"})
+        elif osc > 0:
+            out.append({"name": "OSC(20日)", "verdict": "neutral", "label": f"{osc:+,.0f} 上昇一服",
+                        "detail": "終値は20日線より上ですが、差は縮小中。上昇の勢いが弱まっています。"})
+        elif osc < 0 and osc <= prev_osc:
+            out.append({"name": "OSC(20日)", "verdict": "sell", "label": f"{osc:+,.0f} 下落圧力",
+                        "detail": "終値が20日線より下で、その差も拡大中。下落圧力が続いています。"})
+        else:
+            out.append({"name": "OSC(20日)", "verdict": "neutral", "label": f"{osc:+,.0f} 下げ止まり",
+                        "detail": "終値は20日線より下ですが、差は縮小中。下げ止まりの兆しがあります。"})
+
+    # 8. AR（26日・人気指標）
+    if "AR" in df.columns and pd.notna(df["AR"].iloc[-1]):
+        ar = float(df["AR"].iloc[-1])
+        if ar <= 70:
+            out.append({"name": "AR(26日)", "verdict": "buy", "label": f"{ar:.0f} 低水準",
+                        "detail": "ARが70以下。買いエネルギーが枯れた低水準で、反発の素地があります。"})
+        elif ar >= 150:
+            out.append({"name": "AR(26日)", "verdict": "sell", "label": f"{ar:.0f} 過熱",
+                        "detail": "ARが150以上。買いエネルギーが過熱気味で、反落に注意です。"})
+        else:
+            out.append({"name": "AR(26日)", "verdict": "neutral", "label": f"{ar:.0f} 標準",
+                        "detail": "ARは70〜150の標準圏で、極端な偏りはありません。"})
+
+    # 9. VR（26日・出来高比率）
+    if "VR" in df.columns and pd.notna(df["VR"].iloc[-1]):
+        vr = float(df["VR"].iloc[-1])
+        if vr <= 70:
+            out.append({"name": "VR(26日)", "verdict": "buy", "label": f"{vr:.0f}% 底値圏",
+                        "detail": "VRが70%以下。売りの出来高が支配的な底値圏で、仕込み場とされる水準です。"})
+        elif vr >= 300:
+            out.append({"name": "VR(26日)", "verdict": "sell", "label": f"{vr:.0f}% 過熱",
+                        "detail": "VRが300%以上。買いの出来高に偏りすぎており、天井圏の可能性があります。"})
+        else:
+            out.append({"name": "VR(26日)", "verdict": "neutral", "label": f"{vr:.0f}% 標準",
+                        "detail": "VRは70〜300%の標準圏で、出来高の偏りは大きくありません。"})
+
+    # 10. 一目均衡表（雲）
+    if "SPAN_A" in df.columns:
+        sa, sb = df["SPAN_A"].iloc[-1], df["SPAN_B"].iloc[-1]
+        if pd.notna(sa) and pd.notna(sb):
+            cloud_top, cloud_bot = max(sa, sb), min(sa, sb)
+            if close > cloud_top:
+                out.append({"name": "一目均衡表", "verdict": "buy", "label": "雲の上",
+                            "detail": "株価が雲（抵抗帯）の上にあり、強気の形です。雲が下支えになります。"})
+            elif close < cloud_bot:
+                out.append({"name": "一目均衡表", "verdict": "sell", "label": "雲の下",
+                            "detail": "株価が雲の下にあり、弱気の形です。雲が上値の抵抗になります。"})
+            else:
+                out.append({"name": "一目均衡表", "verdict": "neutral", "label": "雲の中",
+                            "detail": "株価が雲の中にあり、もみ合い状態です。雲の抜けた方向に動きやすいとされます。"})
+
+    # 11. DMI / ADX（14日）
+    if "ADX" in df.columns:
+        pdi, mdi, adx = df["PDI"].iloc[-1], df["MDI"].iloc[-1], df["ADX"].iloc[-1]
+        if pd.notna(pdi) and pd.notna(mdi) and pd.notna(adx):
+            if adx >= 25 and pdi > mdi:
+                out.append({"name": "DMI/ADX", "verdict": "buy", "label": f"ADX {adx:.0f} 上昇トレンド",
+                            "detail": f"+DI({pdi:.0f}) > -DI({mdi:.0f}) かつ ADXが25以上。明確な上昇トレンドです。"})
+            elif adx >= 25 and mdi > pdi:
+                out.append({"name": "DMI/ADX", "verdict": "sell", "label": f"ADX {adx:.0f} 下降トレンド",
+                            "detail": f"-DI({mdi:.0f}) > +DI({pdi:.0f}) かつ ADXが25以上。明確な下降トレンドです。"})
+            else:
+                out.append({"name": "DMI/ADX", "verdict": "neutral", "label": f"ADX {adx:.0f} トレンドなし",
+                            "detail": "ADXが25未満で、明確なトレンドが発生していません。"})
+
+    # 12. CCI（20日）
+    if "CCI" in df.columns and pd.notna(df["CCI"].iloc[-1]):
+        cci = float(df["CCI"].iloc[-1])
+        if cci <= -100:
+            out.append({"name": "CCI(20日)", "verdict": "buy", "label": f"{cci:.0f} 売られすぎ",
+                        "detail": "CCIが-100を下回り、平均から下に行き過ぎています。反発が期待できる水準です。"})
+        elif cci >= 100:
+            out.append({"name": "CCI(20日)", "verdict": "sell", "label": f"{cci:.0f} 買われすぎ",
+                        "detail": "CCIが+100を上回り、平均から上に行き過ぎています。反落に注意です。"})
+        else:
+            out.append({"name": "CCI(20日)", "verdict": "neutral", "label": f"{cci:.0f} 中立",
+                        "detail": "CCIは±100の範囲内で、行き過ぎはありません。"})
+
+    # 13. W%R（14日）
+    if "WR" in df.columns and pd.notna(df["WR"].iloc[-1]):
+        wr = float(df["WR"].iloc[-1])
+        if wr <= -80:
+            out.append({"name": "W%R(14日)", "verdict": "buy", "label": f"{wr:.0f} 売られすぎ",
+                        "detail": "W%Rが-80以下。期間中の安値圏に位置しており、反発候補です。"})
+        elif wr >= -20:
+            out.append({"name": "W%R(14日)", "verdict": "sell", "label": f"{wr:.0f} 買われすぎ",
+                        "detail": "W%Rが-20以上。期間中の高値圏に位置しており、過熱気味です。"})
+        else:
+            out.append({"name": "W%R(14日)", "verdict": "neutral", "label": f"{wr:.0f} 中立",
+                        "detail": "W%Rは-20〜-80の中間圏で、偏りはありません。"})
+
+    # 14. モメンタム（10日）
+    if "MOM" in df.columns and pd.notna(df["MOM"].iloc[-1]):
+        mom = float(df["MOM"].iloc[-1])
+        prev_mom = float(df["MOM"].iloc[-2]) if len(df) > 1 and pd.notna(df["MOM"].iloc[-2]) else mom
+        if mom > 0 and mom >= prev_mom:
+            out.append({"name": "モメンタム", "verdict": "buy", "label": f"{mom:+,.0f} 加速中",
+                        "detail": "10日前より株価が高く、その差も拡大中。上昇の勢いが強まっています。"})
+        elif mom < 0 and mom <= prev_mom:
+            out.append({"name": "モメンタム", "verdict": "sell", "label": f"{mom:+,.0f} 下落加速",
+                        "detail": "10日前より株価が低く、その差も拡大中。下落の勢いが強まっています。"})
+        else:
+            out.append({"name": "モメンタム", "verdict": "neutral", "label": f"{mom:+,.0f} 勢い鈍化",
+                        "detail": "モメンタムの方向と勢いが一致しておらず、転換点の可能性があります。"})
+
+    # 15. PSY（12日）
+    if "PSY" in df.columns and pd.notna(df["PSY"].iloc[-1]):
+        psy = float(df["PSY"].iloc[-1])
+        if psy <= 25:
+            out.append({"name": "PSY(12日)", "verdict": "buy", "label": f"{psy:.0f}% 弱気過剰",
+                        "detail": "直近12日の上昇日が25%以下。悲観に傾きすぎており、反発が出やすい水準です。"})
+        elif psy >= 75:
+            out.append({"name": "PSY(12日)", "verdict": "sell", "label": f"{psy:.0f}% 強気過剰",
+                        "detail": "直近12日の上昇日が75%以上。楽観に傾きすぎており、反落に注意です。"})
+        else:
+            out.append({"name": "PSY(12日)", "verdict": "neutral", "label": f"{psy:.0f}% 中立",
+                        "detail": "上昇日と下落日のバランスが取れており、心理の偏りはありません。"})
+    return out
+
+
+def _overall_verdict(diags: list[dict]) -> dict:
+    """9指標の買い/売り本数からスコア化して総合判断する"""
+    buy_n = sum(1 for d in diags if d["verdict"] == "buy")
+    sell_n = sum(1 for d in diags if d["verdict"] == "sell")
+    score = buy_n - sell_n
+    if score >= 6:
+        v = ("強い買い", "#16a34a", "★★★★★", "🟢",
+             "大半の指標が買いを示しています。ただし過熱の反動には注意してください。")
+    elif score >= 3:
+        v = ("買い", "#22c55e", "★★★★☆", "🟢",
+             "買い優勢です。押し目やタイミングを見ながら検討しましょう。")
+    elif score <= -6:
+        v = ("強い売り", "#b91c1c", "★☆☆☆☆", "🔴",
+             "大半の指標が売りを示しています。無理な逆張りは避けたい場面です。")
+    elif score <= -3:
+        v = ("売り", "#ef4444", "★★☆☆☆", "🔴",
+             "売り優勢です。新規の買いは慎重に検討してください。")
+    else:
+        v = ("中立", "#eab308", "★★★☆☆", "🟡",
+             "買いと売りが拮抗しています。方向感が出るまで様子見が無難です。")
+    return {"score": score, "buy_n": buy_n, "sell_n": sell_n, "neu_n": len(diags) - buy_n - sell_n,
+            "label": v[0], "color": v[1], "stars": v[2], "emoji": v[3], "comment": v[4]}
+
+
+def _gauge_html(buy_n: int, neu_n: int, sell_n: int) -> str:
+    """買い/中立/売りの割合バー（moomoo風ゲージ）"""
+    total = max(buy_n + neu_n + sell_n, 1)
+    b, n, s = buy_n / total * 100, neu_n / total * 100, sell_n / total * 100
+    return (
+        f'<div style="margin:8px 0 4px 0;">'
+        f'<div style="display:flex;justify-content:space-between;font-size:0.72rem;font-weight:800;">'
+        f'<span class="up">買い {buy_n}</span><span class="muted">中立 {neu_n}</span>'
+        f'<span class="down">売り {sell_n}</span></div>'
+        f'<div style="display:flex;height:8px;border-radius:6px;overflow:hidden;margin-top:4px;">'
+        f'<div style="width:{b}%;background:{UP};"></div>'
+        f'<div style="width:{n}%;background:var(--border);"></div>'
+        f'<div style="width:{s}%;background:{DOWN};"></div></div></div>'
+    )
+
+
+def _diagnosis_html(diags: list[dict]) -> str:
+    from html import escape
+    styles = {
+        "buy": f"background:rgba(22,199,132,.14);color:{UP};",
+        "sell": f"background:rgba(234,57,67,.14);color:{DOWN};",
+        "neutral": "background:var(--tag-bg);color:var(--text-sub);",
+    }
+    mark = {"buy": "▲", "sell": "▼", "neutral": "―"}
+    chips = "".join(
+        f'<span style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;'
+        f'border-radius:30px;font-size:0.74rem;font-weight:700;{styles[d["verdict"]]}">'
+        f'{mark[d["verdict"]]} {escape(d["name"])}: {escape(d["label"])}</span>'
+        for d in diags
+    )
+    return f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px 0;">{chips}</div>'
+
+
+def render_trade_chart(ticker: str) -> None:
+    """デモトレード画面用のmoomoo風チャート（スタッツ帯＋多指標＋9指標総合診断）"""
+    price = get_price(ticker)
+    if price is not None:
+        st.markdown(_stat_strip_html(ticker, price), unsafe_allow_html=True)
+
+    period_map = {"1日": ("1d", "5m"), "1週間": ("5d", "15m"), "1ヶ月": ("1mo", "1d"),
+                  "3ヶ月": ("3mo", "1d"), "6ヶ月": ("6mo", "1d"), "1年": ("1y", "1d")}
+    pc1, pc2 = st.columns([1.4, 1.6])
+    p_label = pc1.radio("チャート期間", list(period_map.keys()), index=2, horizontal=True,
+                        key="trade_chart_period", label_visibility="collapsed")
+    inds = pc2.multiselect(
+        "表示指標", ["MA(5/25/75)", "ボリンジャーバンド", "出来高", "RSI(14)", "MACD", "KDJ"],
+        default=["MA(5/25/75)", "出来高", "MACD"],
+        key="trade_inds", label_visibility="collapsed",
+    )
+    period, interval = period_map[p_label]
+
+    df = get_history(ticker, period, interval)
+    if df.empty:
+        st.info("チャートデータを取得できませんでした。")
+        return
+    df = add_extra_indicators(add_indicators(df))
+
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        st.line_chart(df["Close"], height=300)
+        return
+
+    panel_rows = [p for p in ["出来高", "RSI(14)", "MACD", "KDJ"] if p in inds]
+    rows = ["price"] + panel_rows
+    heights = {"price": 0.52, "出来高": 0.16, "RSI(14)": 0.16, "MACD": 0.16, "KDJ": 0.16}
+    row_h = [heights[r] for r in rows]
+    hs = sum(row_h)
+    fig = make_subplots(rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                        row_heights=[h / hs for h in row_h],
+                        subplot_titles=[("" if r == "price" else r) for r in rows])
+
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        name="株価", increasing_line_color=UP, decreasing_line_color=DOWN), row=1, col=1)
+
+    if "MA(5/25/75)" in inds:
+        for col_name, color in (("SMA5", "#4f7df3"), ("SMA25", "#f0b90b"), ("SMA75", "#9b59b6")):
+            if df[col_name].notna().any():
+                fig.add_trace(go.Scatter(x=df.index, y=df[col_name], name=col_name,
+                                         line=dict(color=color, width=1.1)), row=1, col=1)
+    if "ボリンジャーバンド" in inds and df["BB_up"].notna().any():
+        fig.add_trace(go.Scatter(x=df.index, y=df["BB_up"], name="BB +2σ",
+                                 line=dict(color="rgba(91,141,239,.5)", width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["BB_low"], name="BB -2σ", fill="tonexty",
+                                 fillcolor="rgba(91,141,239,.08)",
+                                 line=dict(color="rgba(91,141,239,.5)", width=1)), row=1, col=1)
+
+    for i, r in enumerate(rows[1:], start=2):
+        if r == "出来高":
+            colors = [UP if c >= o else DOWN for o, c in zip(df["Open"], df["Close"])]
+            fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=colors,
+                                 showlegend=False), row=i, col=1)
+        elif r == "RSI(14)":
+            fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color="#8e44ad", width=1.3),
+                                     showlegend=False), row=i, col=1)
+            fig.add_hline(y=70, line=dict(color=DOWN, width=1, dash="dot"), row=i, col=1)
+            fig.add_hline(y=30, line=dict(color=UP, width=1, dash="dot"), row=i, col=1)
+            fig.update_yaxes(range=[0, 100], row=i, col=1)
+        elif r == "MACD":
+            hist_colors = [UP if pd.notna(v) and v >= 0 else DOWN for v in df["Hist"]]
+            fig.add_trace(go.Bar(x=df.index, y=df["Hist"], marker_color=hist_colors,
+                                 showlegend=False), row=i, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD",
+                                     line=dict(color=ACCENT, width=1.2)), row=i, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["Signal"], name="Signal",
+                                     line=dict(color="#f0b90b", width=1.2)), row=i, col=1)
+        elif r == "KDJ":
+            fig.add_trace(go.Scatter(x=df.index, y=df["K"], name="K",
+                                     line=dict(color="#4f7df3", width=1.2)), row=i, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["D"], name="D",
+                                     line=dict(color="#f0b90b", width=1.2)), row=i, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["J"], name="J",
+                                     line=dict(color="#9b59b6", width=1.1, dash="dot")), row=i, col=1)
+            fig.add_hline(y=80, line=dict(color=DOWN, width=1, dash="dot"), row=i, col=1)
+            fig.add_hline(y=20, line=dict(color=UP, width=1, dash="dot"), row=i, col=1)
+
+    fig.update_layout(height=360 + 105 * len(panel_rows), margin=dict(l=0, r=0, t=16, b=0),
+                      template="plotly_white", xaxis_rangeslider_visible=False,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+                      hovermode="x unified")
+    fig.update_xaxes(rangeslider_visible=False)
+    if interval == "1d":
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    else:
+        hours = [15, 9] if cur_of(ticker) == "¥" else [16, 9.5]
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]),
+                                      dict(bounds=hours, pattern="hour")])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ---- テクニカル診断（日足ベース・9指標の総合判断） ----
+    d6 = get_history(ticker, "6mo", "1d")
+    if len(d6) < 30:
+        return
+    dd = add_extra_indicators(add_indicators(d6))
+    diags = _diagnose_indicators(dd)
+    if not diags:
+        return
+    v = _overall_verdict(diags)
+
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap;">'
+        f'<span style="font-weight:800;font-size:0.9rem;color:var(--text-main);">🩺 テクニカル診断（日足・{len(diags)}指標）</span>'
+        f'<span style="display:inline-block;padding:3px 14px;border-radius:30px;'
+        f'background-color:{v["color"]};color:#fff;font-weight:700;font-size:0.78rem;">'
+        f'{v["emoji"]} 総合: {v["label"]}（スコア {v["score"]:+d}）</span>'
+        f'<span class="muted" style="font-size:0.78rem;font-weight:700;">{v["stars"]}</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(_gauge_html(v["buy_n"], v["neu_n"], v["sell_n"]), unsafe_allow_html=True)
+    st.markdown(_diagnosis_html(diags), unsafe_allow_html=True)
+    st.caption(f"💬 {v['comment']}")
+    with st.expander("📖 各指標の見方・判定理由"):
+        for d in diags:
+            icon = {"buy": "🟢", "sell": "🔴", "neutral": "⚪"}[d["verdict"]]
+            st.markdown(f"{icon} **{d['name']}**（{d['label']}）: {d['detail']}")
+        st.caption("※ 診断は日足6ヶ月のデータに基づく参考情報です。スコア＝買い指標数−売り指標数。投資判断は他の情報もあわせて行ってください。")
+
+
+def _trade_manual_tab(ss) -> None:
+    pending = ss.pop("_trade_code_pending", None)
+    if pending is not None:
+        ss["trade_code"] = pending
+
+    st.caption("銘柄コード（例: 7203）または銘柄名（例: トヨタ）を入力すると、チャートと注文フォームが表示されます。")
+    in1, in2 = st.columns([3, 1])
+    code = in1.text_input("証券コード・銘柄名", placeholder="例: 7203, トヨタ, AAPL",
+                          label_visibility="collapsed", key="trade_code")
+    with in2:
+        with st.popover("⚡ クイック銘柄", use_container_width=True):
+            for tk in QUICK_TICKERS:
+                if st.button(CODE2NAME.get(tk, tk), key=f"pq_{tk}", use_container_width=True):
+                    ss["_trade_code_pending"] = tk.replace(".T", "")
+                    st.rerun()
+
+    ticker = resolve_trade_symbol(code)
+    price = get_price(ticker) if ticker else None
+
+    if code and ticker and price is None:
+        st.warning("価格を取得できませんでした。コードや銘柄名を確認してください。")
+
+    if ticker and price:
+        left, right = st.columns([1.8, 1])
+        with left:
+            with st.container(border=True):
+                st.markdown(
+                    f'<div class="panel-head"><span class="ph-title">📈 {label_of(ticker)}</span>'
+                    f'<span class="ph-more">¥{price:,.1f}</span></div>',
+                    unsafe_allow_html=True,
+                )
+                render_trade_chart(ticker)
+        with right:
+            with st.container(border=True):
+                st.markdown('<div class="panel-head"><span class="ph-title">🛒 注文フォーム</span></div>',
+                            unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:var(--tint-bg);border-radius:14px;padding:12px 16px;'
+                    f'margin-bottom:10px;border:1px solid var(--tint-border);">'
+                    f'<div style="font-weight:600;font-size:0.85rem;color:var(--text-sub);">{label_of(ticker)}</div>'
+                    f'<div style="font-size:1.5rem;font-weight:700;color:var(--text-main);">¥{price:,.1f}</div></div>',
+                    unsafe_allow_html=True,
+                )
+                pos = ss.positions.get(ticker)
+                if pos and pos.shares:
+                    st.caption(f"📦 保有 {pos.shares}株 ／ 平均取得 ¥{pos.cost_basis:,.1f}")
+                st.caption(f"💰 現金残高: {yen(ss.cash)}")
+                side = st.radio("売買", ["買い", "売り"], horizontal=True, key="pt_side")
+                shares = st.number_input("株数", min_value=1, value=100, step=100, key="pt_shares")
+                st.caption(f"概算約定額: **{yen(shares * price)}**")
+                if st.button("🚀 注文を出す", type="primary", use_container_width=True, key="pt_order"):
+                    ok, msg = execute_trade(ticker, side, int(shares), price)
+                    if ok:
+                        st.success(f"✅ {msg}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {msg}")
     st.write("")
 
-    left, right = st.columns([1.6, 1])
-    
-    with left:
+    left2, right2 = st.columns([1.6, 1])
+    with left2:
         st.markdown("### 📦 保有ポジション")
         rows = []
         for tk, pos in ss.positions.items():
@@ -1972,70 +2682,255 @@ def page_trade() -> None:
                       "損益": "{:+,.0f}", "損益率%": "{:+.2f}"})
             st.dataframe(styled, use_container_width=True, hide_index=True)
         else:
-            st.info("保有ポジションはありません。右の注文フォームから取引できます。")
-        
+            st.info("保有ポジションはありません。上の入力欄から銘柄を表示して取引できます。")
+
+    with right2:
         st.markdown("### 🧾 取引履歴")
         if ss.trades:
             hist = pd.DataFrame(ss.trades[::-1])
-            st.dataframe(hist, use_container_width=True, hide_index=True)
+            st.dataframe(hist, use_container_width=True, hide_index=True, height=280)
             st.download_button(
                 "📥 CSVをダウンロード",
                 hist.to_csv(index=False).encode("utf-8-sig"),
                 file_name="trade_history.csv",
-                mime="text/csv"
+                mime="text/csv",
             )
+            st.caption("🤖 マークが付いた取引は自動売買による約定です。")
         else:
             st.info("まだ取引はありません。")
-
-    with right:
-        st.markdown("### 🛒 注文フォーム")
-        pending = ss.pop("_trade_code_pending", None)
-        if pending is not None:
-            ss["trade_code"] = pending
-        
-        code = st.text_input("証券コード", placeholder="例: 7203", key="trade_code")
-        ticker = normalize_jp(code)
-        price = get_price(ticker) if ticker else None
-        
-        if ticker and price:
-            st.markdown(f"""
-            <div style="background:var(--tint-bg);border-radius:14px;padding:14px 18px;margin-bottom:12px;border:1px solid var(--tint-border);">
-                <div style="font-weight:600;font-size:0.85rem;color:var(--text-sub);">{label_of(ticker)}</div>
-                <div style="font-size:1.5rem;font-weight:700;color:var(--text-main);">¥{price:,.1f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            s1, s2 = st.columns(2)
-            side = s1.radio("売買", ["買い", "売り"], horizontal=True, key="pt_side")
-            shares = s2.number_input("株数", min_value=1, value=100, step=100, key="pt_shares")
-            st.caption(f"概算約定額: **{yen(shares * price)}**")
-            
-            if st.button("🚀 注文を出す", type="primary", use_container_width=True):
-                ok, msg = execute_trade(ticker, side, int(shares), price)
-                if ok:
-                    st.success(f"✅ {msg}")
-                    st.rerun()
-                else:
-                    st.error(f"❌ {msg}")
-        elif ticker:
-            st.warning("価格を取得できませんでした。コードを確認してください。")
-        else:
-            st.info("証券コードを入力してください。")
-
-        st.markdown("#### クイック銘柄")
-        qcols = st.columns(2)
-        for i, tk in enumerate(QUICK_TICKERS):
-            if qcols[i % 2].button(CODE2NAME.get(tk, tk), key=f"pq_{tk}", use_container_width=True):
-                ss["_trade_code_pending"] = tk.replace(".T", "")
-                st.rerun()
-
         st.divider()
         if st.button("↩️ 口座をリセット", use_container_width=True):
-            for k in ("cash", "positions", "trades"):
+            for k in ("cash", "positions", "trades", "auto_log"):
                 ss.pop(k, None)
             init_trade_state()
+            init_auto_state()
             st.rerun()
         st.caption("※ デモ（ペーパートレード）です。実際の取引は行われません。")
+
+
+def _trade_auto_tab(ss) -> None:
+    st.caption(
+        "登録したルールは、アプリの画面が更新されるたびに自動で判定され、シグナルが変化した瞬間にデモ発注されます。"
+        "ブラウザでアプリを開いている間だけ動作します（実際の取引は行われません）。"
+        "複数銘柄にまとめて投資したい場合は、下の「🧺 分散投資」から一括作成できます。"
+    )
+
+    # --- ルール追加フォーム ---
+    with st.container(border=True):
+        st.markdown('<div class="panel-head"><span class="ph-title">➕ 自動売買ルールを追加</span></div>',
+                    unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([1.6, 1.8, 1])
+        kw = c1.text_input("銘柄コード・銘柄名", placeholder="例: 7203, トヨタ", key="auto_kw")
+        strat = c2.selectbox("戦略", AUTO_STRATEGIES, key="auto_strat",
+                             help="ゴールデンクロス: SMA5/25のクロスで売買 ／ RSI逆張り: 30未満で買い・70超で売り ／ "
+                                  "総合シグナル: テクニカル判定（3指標）で売買 ／ "
+                                  "総合診断: 15指標の多数決。買い指標が優勢（スコア+3以上）で買い、"
+                                  "売り指標が増えてきたら（スコア-2以下）早めに売り ／ "
+                                  "指値・逆指値: 指定価格に達したら売買")
+        shares = c3.number_input("株数", min_value=1, value=100, step=100, key="auto_shares")
+        buy_below = sell_above = 0.0
+        if strat == "指値・逆指値":
+            b1, b2 = st.columns(2)
+            buy_below = b1.number_input("この価格以下で買う（0=無効）", min_value=0.0, value=0.0,
+                                        step=10.0, key="auto_buy_below")
+            sell_above = b2.number_input("この価格以上で売る（0=無効）", min_value=0.0, value=0.0,
+                                         step=10.0, key="auto_sell_above")
+        if st.button("🤖 ルールを追加", type="primary", key="auto_add"):
+            tk = resolve_trade_symbol(kw)
+            if not tk or get_price(tk) is None:
+                st.error("銘柄を特定できませんでした。コードや銘柄名を確認してください。")
+            elif strat == "指値・逆指値" and not (buy_below or sell_above):
+                st.error("指値・逆指値では、買い価格か売り価格の少なくとも一方を設定してください。")
+            else:
+                ss["auto_rules"].append({
+                    "id": ss["auto_rule_seq"], "ticker": tk, "strategy": strat,
+                    "shares": int(shares), "enabled": True,
+                    "last_signal": "hold", "last_detail": "未判定", "last_checked": "-",
+                    "buy_below": float(buy_below) or None,
+                    "sell_above": float(sell_above) or None,
+                })
+                ss["auto_rule_seq"] += 1
+                ss["auto_last_eval"] = 0.0  # 追加したルールを即時判定
+                st.toast(f"ルールを追加しました: {label_of(tk)}", icon="🤖")
+                st.rerun()
+
+    st.write("")
+
+    # --- 分散投資（ポートフォリオ一括ルール作成） ---
+    with st.container(border=True):
+        st.markdown('<div class="panel-head"><span class="ph-title">🧺 分散投資（複数銘柄にまとめて自動売買）</span></div>',
+                    unsafe_allow_html=True)
+        st.caption("投資予算を選択した銘柄に均等配分し、同じ戦略の自動売買ルールを一括作成します。"
+                   "1銘柄あたりの株数は作成時の株価から自動計算されます。")
+        for m in ss.pop("_pf_skipped", []):
+            st.warning(m)
+        opts = {f"{name}（{code}）": code for code, name in sorted(CODE2NAME.items())
+                if not code.startswith("^")}
+        defaults = [k for k, v in opts.items() if v in QUICK_TICKERS]
+        sel = st.multiselect("対象銘柄（複数選択）", list(opts.keys()), default=defaults, key="pf_stocks")
+        p1, p2 = st.columns(2)
+        pf_strat = p1.selectbox("戦略", [s for s in AUTO_STRATEGIES if s != "指値・逆指値"],
+                                index=3, key="pf_strat")
+        pf_budget = p2.number_input("投資予算（円）", min_value=10_000, value=1_000_000,
+                                    step=100_000, key="pf_budget")
+        if sel:
+            st.caption(f"1銘柄あたり約 {yen(pf_budget / len(sel))} を配分（現金残高 {yen(ss.cash)}）。"
+                       "予算が現金残高を超えると、買いシグナル時に残高不足で約定しないことがあります。")
+        if st.button("🧺 分散ルールを一括作成", type="primary", key="pf_add", disabled=not sel):
+            group = f"分散{ss['auto_group_seq']}"
+            alloc = pf_budget / len(sel)
+            created, skipped = 0, []
+            for label_sel in sel:
+                code = opts[label_sel]
+                price = get_price(code)
+                if price is None:
+                    skipped.append(f"{label_sel}: 価格を取得できないためスキップしました。")
+                    continue
+                shares = int(alloc // price)
+                if shares < 1:
+                    skipped.append(f"{label_sel}: 配分額 {yen(alloc)} では1株（¥{price:,.0f}）も"
+                                   "買えないためスキップしました。銘柄数を減らすか予算を増やしてください。")
+                    continue
+                ss["auto_rules"].append({
+                    "id": ss["auto_rule_seq"], "ticker": code, "strategy": pf_strat,
+                    "shares": shares, "enabled": True, "group": group,
+                    "last_signal": "hold", "last_detail": "未判定", "last_checked": "-",
+                    "buy_below": None, "sell_above": None,
+                })
+                ss["auto_rule_seq"] += 1
+                created += 1
+            if created:
+                ss["auto_group_seq"] += 1
+                st.toast(f"{group}: {created}銘柄の分散ルールを作成しました。", icon="🧺")
+            ss["_pf_skipped"] = skipped
+            ss["auto_last_eval"] = 0.0  # 追加したルールを即時判定
+            st.rerun()
+
+    st.write("")
+
+    # --- 登録ルール一覧 ---
+    hc1, hc2 = st.columns([3, 1])
+    hc1.markdown("#### 📋 登録ルール")
+    if hc2.button("🔍 今すぐ判定", use_container_width=True, key="auto_check_now"):
+        get_price.clear()
+        get_history.clear()
+        ss["auto_last_eval"] = 0.0
+        st.rerun()
+
+    # 分散投資グループの一括操作
+    pf_groups: dict[str, list[dict]] = {}
+    for r in ss["auto_rules"]:
+        if r.get("group"):
+            pf_groups.setdefault(r["group"], []).append(r)
+    for g, rules_g in pf_groups.items():
+        with st.container(border=True):
+            g1, g2, g3, g4 = st.columns([2.6, 1, 1, 1])
+            n_on = sum(1 for r in rules_g if r.get("enabled", True))
+            g1.markdown(f"**🧺 {g}**")
+            g1.caption(f"{rules_g[0]['strategy']}｜{len(rules_g)}銘柄（稼働 {n_on}）")
+            if g2.button("全て有効", key=f"g_on_{g}", use_container_width=True):
+                for r in rules_g:
+                    r["enabled"] = True
+                    ss[f"auto_en_{r['id']}"] = True
+                st.rerun()
+            if g3.button("全て無効", key=f"g_off_{g}", use_container_width=True):
+                for r in rules_g:
+                    r["enabled"] = False
+                    ss[f"auto_en_{r['id']}"] = False
+                st.rerun()
+            if g4.button("🗑️ 一括削除", key=f"g_del_{g}", use_container_width=True):
+                ids = {r["id"] for r in rules_g}
+                ss["auto_rules"] = [r for r in ss["auto_rules"] if r["id"] not in ids]
+                st.rerun()
+
+    if not ss["auto_rules"]:
+        st.info("ルールはまだ登録されていません。上のフォームから追加してください。")
+    else:
+        for rule in list(ss["auto_rules"]):
+            with st.container(border=True):
+                a, b, c, d = st.columns([1.8, 2.6, 0.9, 0.9])
+                with a:
+                    st.markdown(f"**{label_of(rule['ticker'])}**")
+                    lim = ""
+                    if rule["strategy"] == "指値・逆指値":
+                        parts = []
+                        if rule.get("buy_below"):
+                            parts.append(f"買≤{rule['buy_below']:,.0f}")
+                        if rule.get("sell_above"):
+                            parts.append(f"売≥{rule['sell_above']:,.0f}")
+                        lim = "／" + "・".join(parts)
+                    grp = f"🧺{rule['group']}｜" if rule.get("group") else ""
+                    st.caption(f"{grp}{rule['shares']}株{lim}")
+                with b:
+                    st.markdown(SIG_LABEL.get(rule.get("last_signal", "hold"), "⚪ 待機中"))
+                    st.caption(f"{rule['strategy']}｜{rule.get('last_detail', '-')}"
+                               f"（判定 {rule.get('last_checked', '-')}）")
+                with c:
+                    rule["enabled"] = st.toggle("有効", value=rule.get("enabled", True),
+                                                key=f"auto_en_{rule['id']}")
+                with d:
+                    if st.button("🗑️ 削除", key=f"auto_del_{rule['id']}", use_container_width=True):
+                        ss["auto_rules"] = [r for r in ss["auto_rules"] if r["id"] != rule["id"]]
+                        st.rerun()
+
+    # --- 実行ログ ---
+    st.markdown("#### 🧾 自動売買ログ")
+    if ss["auto_log"]:
+        st.dataframe(pd.DataFrame(ss["auto_log"]), use_container_width=True,
+                     hide_index=True, height=240)
+    else:
+        st.info("自動売買の実行履歴はまだありません。シグナルが変化すると、ここに記録されます。")
+
+    st.divider()
+    auto_ref = st.toggle("⏱️ 60秒ごとに自動判定（このページを開いている間のみ）",
+                         value=False, key="auto_refresh")
+    st.caption("※ オンにすると60秒ごとに株価を再取得してルールを判定します。ブラウザを閉じると停止します。")
+    if auto_ref:
+        time.sleep(60)
+        st.rerun()
+
+
+def page_trade() -> None:
+    init_trade_state()
+    init_auto_state()
+    ss = st.session_state
+
+    st.markdown(
+        '<div class="gradient-header">'
+        '<h2>💼 デモトレード</h2>'
+        '<p>yfinance の実データを使った日本株ペーパートレード（仮想資金100万円）＋ 自動売買（デモ）</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # サマリー
+    holdings_value = 0.0
+    for tk, pos in ss.positions.items():
+        if pos.shares:
+            p = get_price(tk)
+            if p:
+                holdings_value += pos.shares * p
+    total = ss.cash + holdings_value
+    pnl = total - INITIAL_CASH
+    pct = pnl / INITIAL_CASH * 100
+    cls = "up" if pnl > 0 else ("down" if pnl < 0 else "muted")
+    arrow = "▲" if pnl > 0 else ("▼" if pnl < 0 else "—")
+
+    n_active = sum(1 for r in ss["auto_rules"] if r.get("enabled", True))
+    col1, col2, col3, col4 = st.columns(4)
+    col1.markdown(card_html("総資産", yen(total), f"{arrow} {yen(abs(pnl))}（{pct:+.2f}%）", cls),
+                  unsafe_allow_html=True)
+    col2.markdown(card_html("現金残高", yen(ss.cash)), unsafe_allow_html=True)
+    col3.markdown(card_html("株式評価額", yen(holdings_value)), unsafe_allow_html=True)
+    col4.markdown(card_html("自動売買ルール", f"{n_active}件 稼働中", f"登録 {len(ss['auto_rules'])}件"),
+                  unsafe_allow_html=True)
+    st.write("")
+
+    tab_manual, tab_auto = st.tabs(["📈 取引", "🤖 自動売買"])
+    with tab_manual:
+        _trade_manual_tab(ss)
+    with tab_auto:
+        _trade_auto_tab(ss)
 
 
 # ===========================================================================
@@ -2129,11 +3024,15 @@ def main() -> None:
 
     _sidebar_nav(nav.title)
 
-    # ===== 修改区域：顶部布局（向左移靠，将搜索框放在右侧并往下推一点） =====
+    # 自動売買ルールの判定（どのページを開いていても、画面更新のたびに実行）
+    for _m in run_auto_rules():
+        st.toast(f"🤖 自動売買: {_m}", icon="🤖")
+
+    # ===== トップバー（時刻表示とグローバル検索） =====
     c_left, c_mid, c_search = st.columns([3, 2, 3])
     
     with c_left:
-        st.write("") # 占位，保持左侧清爽
+        st.write("")  # 左側の余白
     
     with c_mid:
         now = dt.datetime.now()
@@ -2145,17 +3044,20 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        with c_search:
-        # 把刚才那个 st.container(height=60) 删掉
-            st.text_input(
+    # トップバー検索（入力するとホームで検索を実行）
+    with c_search:
+        st.text_input(
             "🔍 銘柄名・コードを検索",
             placeholder="例: トヨタ, 7203.T",
             label_visibility="collapsed",
             key="global_search",
             on_change=lambda: st.session_state.update({"_sr": st.session_state.global_search}),
-            # 加上这一行，把 CSS 绑定到输入框的外层容器上
-            args=("topbar-search",) 
         )
+
+    # ホーム以外のページでトップバー検索されたら、ホームへ移動して検索を実行
+    if st.session_state.get("_sr") and nav.title != "ホーム（銘柄検索）":
+        st.switch_page(PG_HOME)
+
     nav.run()
 
 if __name__ == "__main__":
